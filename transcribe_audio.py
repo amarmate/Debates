@@ -10,9 +10,17 @@ import os
 from pathlib import Path
 from tqdm import tqdm
 import librosa
+import numpy as np
 import threading
 import time
+import warnings
 from typing import List, Dict, Tuple, Optional
+
+# Suppress torchcodec warnings - pyannote.audio will fall back to librosa
+warnings.filterwarnings("ignore", message=".*torchcodec.*")
+warnings.filterwarnings("ignore", message=".*libtorchcodec.*")
+# Suppress std() degrees of freedom warning from pyannote pooling
+warnings.filterwarnings("ignore", message=".*std\\(\\): degrees of freedom.*")
 
 
 class TranscriptionProgress:
@@ -80,11 +88,15 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
         from pyannote.audio import Pipeline
         from pyannote.core import Annotation
     except ImportError:
-        print("\nError: pyannote.audio is not installed.")
-        print("Please install it with: pip install pyannote.audio")
-        print("You also need a Hugging Face token to access the models.")
-        print("Get one at: https://huggingface.co/settings/tokens")
-        print("Then authenticate with: huggingface-cli login")
+        print("\nError: pyannote.audio is not installed or not accessible.")
+        print("\nIf you're using uv (you have uv.lock file):")
+        print("  Run the script with: uv run python transcribe_audio.py <audio_file>")
+        print("\nIf you're using pip:")
+        print("  Install with: pip install pyannote.audio")
+        print("\nYou also need a Hugging Face token to access the models:")
+        print("  1. Get one at: https://huggingface.co/settings/tokens")
+        print("  2. Authenticate: huggingface-cli login")
+        print("  3. Accept model terms: https://huggingface.co/pyannote/speaker-diarization-3.1")
         return None
     
     print("\nLoading speaker diarization model...")
@@ -114,11 +126,25 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
     
     print("Performing speaker diarization...")
     try:
-        # Run diarization
+        # Preprocess audio with librosa to ensure consistent sample rate
+        # pyannote.audio expects 16kHz mono audio
+        print("Preprocessing audio (resampling to 16kHz mono)...")
+        audio, original_sr = librosa.load(audio_path, sr=16000, mono=True)
+        
+        # Convert to the format pyannote expects: dict with waveform and sample_rate
+        # Shape needs to be (channels, samples) - mono = 1 channel
+        waveform = audio.reshape(1, -1)  # Shape: (1, samples) for mono
+        
+        audio_dict = {
+            "waveform": waveform,
+            "sample_rate": 16000
+        }
+        
+        # Run diarization with preprocessed audio
         if num_speakers:
-            diarization = pipeline(audio_path, num_speakers=num_speakers)
+            diarization = pipeline(audio_dict, num_speakers=num_speakers)
         else:
-            diarization = pipeline(audio_path)
+            diarization = pipeline(audio_dict)
         
         # Extract speaker segments
         speaker_segments = []
@@ -130,6 +156,8 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
         
     except Exception as e:
         print(f"Error during diarization: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -243,12 +271,25 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
     speaker_segments = None
     if enable_diarization:
         speaker_segments = perform_speaker_diarization(audio_path, num_speakers)
+        if speaker_segments is None:
+            print("\n⚠️  WARNING: Speaker diarization failed or is not available.")
+            print("   All segments will be labeled as 'UNKNOWN'.")
+            print("   To enable speaker identification:")
+            print("   1. Install pyannote.audio: pip install pyannote.audio")
+            print("   2. Get a Hugging Face token: https://huggingface.co/settings/tokens")
+            print("   3. Authenticate: huggingface-cli login")
+            print("   4. Accept model terms: https://huggingface.co/pyannote/speaker-diarization-3.1")
+            print("   Or run with --no-diarization to disable speaker identification.\n")
     
     # Match speakers to transcription segments
     segments = result.get("segments", [])
     if speaker_segments and segments:
         segments = match_speakers_to_segments(segments, speaker_segments)
         result["segments"] = segments
+    elif enable_diarization and segments:
+        # Diarization was enabled but failed - add UNKNOWN speaker labels
+        for segment in segments:
+            segment["speaker"] = "UNKNOWN"
     
     # Generate annotated text
     if segments and speaker_segments:
@@ -301,6 +342,14 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
 
 
 if __name__ == "__main__":
+    # Check if pyannote.audio is available (for better error messages)
+    pyannote_available = False
+    try:
+        import pyannote.audio
+        pyannote_available = True
+    except ImportError:
+        pass
+    
     # Default to test_debate.mp3 if no argument provided
     audio_file = sys.argv[1] if len(sys.argv) > 1 else "test_debate.mp3"
     
@@ -318,6 +367,16 @@ if __name__ == "__main__":
     
     # Optional: disable diarization with --no-diarization flag
     enable_diarization = "--no-diarization" not in sys.argv
+    
+    # Warn if diarization is enabled but pyannote is not available
+    if enable_diarization and not pyannote_available:
+        uv_lock_exists = Path("uv.lock").exists()
+        print("\n⚠️  WARNING: pyannote.audio is not available in the current Python environment.")
+        if uv_lock_exists:
+            print("   You're using uv - run the script with: uv run python transcribe_audio.py <audio_file>")
+        else:
+            print("   Install with: pip install pyannote.audio")
+        print("   Speaker diarization will be disabled. All segments will be labeled as 'UNKNOWN'.\n")
     
     print("=" * 80)
     print("Whisper Audio Transcription with Speaker Diarization")
