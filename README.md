@@ -47,9 +47,70 @@ python sacar_debates.py
 
 Make sure the virtual environment is activated before running the script.
 
+## Audio Transcription with Speaker Diarization
+
+The `transcribe_audio.py` script transcribes audio files using OpenAI Whisper and automatically identifies speakers.
+
+### Setup for Speaker Diarization
+
+1. **Install dependencies:**
+   ```powershell
+   uv pip install -e .
+   ```
+   This will install all dependencies including `pyannote.audio`.
+
+2. **Get a Hugging Face token:**
+   - Go to https://huggingface.co/settings/tokens
+   - Create a new token (read access is sufficient)
+
+3. **Accept the model terms:**
+   - Visit https://huggingface.co/pyannote/speaker-diarization-3.1
+   - Accept the model terms and conditions
+
+4. **Authenticate:**
+   ```powershell
+   huggingface-cli login
+   ```
+   Enter your token when prompted.
+
+### Usage
+
+**Basic transcription with speaker diarization:**
+```powershell
+python transcribe_audio.py audio_file.mp3
+```
+
+**Specify Whisper model size:**
+```powershell
+python transcribe_audio.py audio_file.mp3 base
+```
+
+**Specify number of speakers (if known):**
+```powershell
+python transcribe_audio.py audio_file.mp3 base 2
+```
+
+**Disable speaker diarization:**
+```powershell
+python transcribe_audio.py audio_file.mp3 base --no-diarization
+```
+
+The output will be saved to `audio_file.txt` with speaker annotations in the format:
+```
+[SPEAKER_00]:
+Text spoken by speaker 00...
+
+[SPEAKER_01]:
+Text spoken by speaker 01...
+```
+
 ## Dependencies
 
 - `playwright` - For browser automation to intercept network requests
 - `yt-dlp` - For downloading and converting video streams to audio
+- `openai-whisper` - For audio transcription
+- `pyannote.audio` - For speaker diarization
+- `librosa` - For audio processing
+- `tqdm` - For progress bars
 
 
