@@ -127,13 +127,13 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
     print("Performing speaker diarization...")
     try:
         # Preprocess audio with librosa to ensure consistent sample rate
-        # pyannote.audio expects 16kHz mono audio
+        # pyannote.audio expects 16kHz mono audio as a PyTorch tensor
         print("Preprocessing audio (resampling to 16kHz mono)...")
         audio, original_sr = librosa.load(audio_path, sr=16000, mono=True)
         
-        # Convert to the format pyannote expects: dict with waveform and sample_rate
-        # Shape needs to be (channels, samples) - mono = 1 channel
-        waveform = audio.reshape(1, -1)  # Shape: (1, samples) for mono
+        # Convert to PyTorch tensor - pyannote.audio requires torch tensors
+        import torch
+        waveform = torch.from_numpy(audio).reshape(1, -1)  # Shape: (1, samples) for mono
         
         audio_dict = {
             "waveform": waveform,
