@@ -126,30 +126,66 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
     
     print("Performing speaker diarization...")
     try:
-        # Preprocess audio with librosa to ensure consistent sample rate
-        # pyannote.audio expects 16kHz mono audio as a PyTorch tensor
-        print("Preprocessing audio (resampling to 16kHz mono)...")
-        audio, original_sr = librosa.load(audio_path, sr=16000, mono=True)
-        
-        # Convert to PyTorch tensor - pyannote.audio requires torch tensors
-        import torch
-        waveform = torch.from_numpy(audio).reshape(1, -1)  # Shape: (1, samples) for mono
-        
-        audio_dict = {
-            "waveform": waveform,
-            "sample_rate": 16000
-        }
-        
-        # Run diarization with preprocessed audio
+        # Load audio manually to avoid torchcodec/AudioDecoder issues on Windows
+        # pyannote.audio 3.1+ can accept memory inputs
+        try:
+            import torch
+            import librosa
+            import numpy as np
+            
+            # Load with librosa (which uses soundfile/ffmpeg CLI and is more robust on Windows)
+            # Load as mono to ensure consistent shape (1, time)
+            waveform, sample_rate = librosa.load(audio_path, sr=None, mono=True)
+            
+            # Reshape to (channels, time) -> (1, time) for mono
+            if waveform.ndim == 1:
+                waveform = waveform[np.newaxis, :]
+            
+            # Convert to torch tensor
+            waveform_tensor = torch.from_numpy(waveform)
+            
+            audio_input = {"waveform": waveform_tensor, "sample_rate": sample_rate}
+            print(f"Loaded audio into memory: shape={waveform_tensor.shape}, sr={sample_rate}")
+            
+        except Exception as e:
+            print(f"Warning: Failed to load audio into memory: {e}")
+            print("Falling back to file path input (may fail if torchcodec is missing)...")
+            audio_input = {"audio": audio_path}
+
         if num_speakers:
-            diarization = pipeline(audio_dict, num_speakers=num_speakers)
+            diarization = pipeline(audio_input, num_speakers=num_speakers)
         else:
-            diarization = pipeline(audio_dict)
+            diarization = pipeline(audio_input)
         
         # Extract speaker segments
+        # Handle different API versions of pyannote.audio
         speaker_segments = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
-            speaker_segments.append((turn.start, turn.end, speaker))
+        
+        # Check if it's a DiarizeOutput (newer API) - try to get the annotation
+        if hasattr(diarization, 'speaker_diarization'):
+            # pyannote 4.x DiarizeOutput
+            annotation = diarization.speaker_diarization
+            for turn, _, speaker in annotation.itertracks(yield_label=True):
+                speaker_segments.append((turn.start, turn.end, speaker))
+        elif hasattr(diarization, 'annotation'):
+            # DiarizeOutput has an annotation attribute
+            annotation = diarization.annotation
+            for turn, _, speaker in annotation.itertracks(yield_label=True):
+                speaker_segments.append((turn.start, turn.end, speaker))
+        elif hasattr(diarization, 'itertracks'):
+            # Direct Annotation object (older API)
+            for turn, _, speaker in diarization.itertracks(yield_label=True):
+                speaker_segments.append((turn.start, turn.end, speaker))
+        else:
+            # Try to iterate directly - might be iterable
+            try:
+                for turn, _, speaker in diarization:
+                    speaker_segments.append((turn.start, turn.end, speaker))
+            except (TypeError, ValueError):
+                # Debug: print what we actually have
+                print(f"Debug: diarization type = {type(diarization)}")
+                print(f"Debug: diarization attributes = {dir(diarization)}")
+                raise ValueError(f"Unknown diarization output format: {type(diarization)}. Attributes: {[attr for attr in dir(diarization) if not attr.startswith('_')]}")
         
         print(f"Found {len(set(seg[2] for seg in speaker_segments))} speaker(s)")
         return speaker_segments
@@ -272,7 +308,7 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
     if enable_diarization:
         speaker_segments = perform_speaker_diarization(audio_path, num_speakers)
         if speaker_segments is None:
-            print("\n⚠️  WARNING: Speaker diarization failed or is not available.")
+            print("\nWARNING: Speaker diarization failed or is not available.")
             print("   All segments will be labeled as 'UNKNOWN'.")
             print("   To enable speaker identification:")
             print("   1. Install pyannote.audio: pip install pyannote.audio")
@@ -371,7 +407,7 @@ if __name__ == "__main__":
     # Warn if diarization is enabled but pyannote is not available
     if enable_diarization and not pyannote_available:
         uv_lock_exists = Path("uv.lock").exists()
-        print("\n⚠️  WARNING: pyannote.audio is not available in the current Python environment.")
+        print("\nWARNING: pyannote.audio is not available in the current Python environment.")
         if uv_lock_exists:
             print("   You're using uv - run the script with: uv run python transcribe_audio.py <audio_file>")
         else:
