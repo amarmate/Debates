@@ -179,74 +179,28 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
 
     logger.info("Performing speaker diarization...")
     try:
-        # Load audio manually to avoid torchcodec/AudioDecoder issues on Windows
-        # pyannote.audio 3.1+ can accept memory inputs
-        try:
-            # OPTIMIZATION: Resample to 16kHz for faster processing
-            # pyannote works well with 16kHz, and this reduces data by 3x for 48kHz audio
-            target_sr = 16000
-            logger.info("Loading audio and resampling to %sHz for faster processing...", target_sr)
-            
-            # Load with librosa and resample to 16kHz (much faster than 48kHz)
-            waveform, original_sr = librosa.load(audio_path, sr=None, mono=True)
-            
-            # Resample if needed
-            if original_sr != target_sr:
-                waveform = librosa.resample(waveform, orig_sr=original_sr, target_sr=target_sr)
-                sample_rate = target_sr
-                logger.info(
-                    "Resampled from %sHz to %sHz (reduced by %.1fx)",
-                    original_sr, target_sr, original_sr / target_sr,
-                )
-            else:
-                sample_rate = original_sr
-            
-            # Reshape to (channels, time) -> (1, time) for mono
-            if waveform.ndim == 1:
-                waveform = waveform[np.newaxis, :]
-            
-            # Convert to torch tensor and move to same device as pipeline
-            # Try to detect device from pipeline, fallback to CUDA if available
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            # Check if pipeline has a device attribute or try to infer from its components
-            try:
-                if hasattr(pipeline, 'segmentation') and hasattr(pipeline.segmentation, 'device'):
-                    device = pipeline.segmentation.device
-                elif hasattr(pipeline, 'embedding') and hasattr(pipeline.embedding, 'device'):
-                    device = pipeline.embedding.device
-            except (AttributeError, RuntimeError):
-                pass  # Use default device
-            
-            waveform_tensor = torch.from_numpy(waveform).to(device)
-            
-            audio_input = {"waveform": waveform_tensor, "sample_rate": sample_rate}
-            duration = waveform_tensor.shape[1] / sample_rate
-            logger.info(
-                "Loaded audio into memory: shape=%s, sr=%s, duration=%.1fs",
-                waveform_tensor.shape, sample_rate, duration,
-            )
-            
-        except Exception as e:
-            logger.warning("Failed to load audio into memory: %s. Falling back to file path input.", e)
-            audio_input = {"audio": audio_path}
+        # Use file path directly - most reliable; pyannote handles loading/resampling internally
+        # In-memory dict input can fail on some systems (torchcodec/backend issues)
+        audio_input = audio_path
 
         # OPTIMIZATION: Use min_duration_off to skip very short silence segments (speeds up processing)
-        # This parameter filters out silence segments shorter than 0.5 seconds
-        diarization_params = {
+        diarization_params: dict = {
             "min_duration_off": 0.5  # Ignore silence segments shorter than 0.5s
         }
-        
-        if num_speakers:
-            diarization_params["num_speakers"] = num_speakers
-        
+        # Political debates typically have 2 candidates; auto-detection can fail
+        effective_num_speakers = num_speakers if num_speakers is not None else 2
+        diarization_params["num_speakers"] = effective_num_speakers
+        if num_speakers is None:
+            logger.info("Using num_speakers=2 (debate default); override with --num-speakers N")
+
         # Show progress indicator for long-running diarization
         logger.info("Processing diarization (this may take a while for long audio files)...")
         start_time = time.time()
-        
+
         # Run diarization in a thread with progress updates
         diarization_result = [None]
         diarization_error = [None]
-        
+
         def run_diarization():
             try:
                 diarization_result[0] = pipeline(audio_input, **diarization_params)
@@ -274,41 +228,35 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
         elapsed_time = time.time() - start_time
         logger.info("Diarization completed in %.1fs", elapsed_time)
         
-        # Extract speaker segments
-        # Handle different API versions of pyannote.audio
+        # Extract speaker segments - handle different pyannote.audio API versions
         speaker_segments = []
-        
-        # Check if it's a DiarizeOutput (newer API) - try to get the annotation
-        if hasattr(diarization, 'speaker_diarization'):
-            # pyannote 4.x DiarizeOutput
-            annotation = diarization.speaker_diarization
+        annotation = (
+            getattr(diarization, "speaker_diarization", None)
+            or getattr(diarization, "annotation", None)
+            or (diarization if hasattr(diarization, "itertracks") else None)
+        )
+        if annotation is not None:
             for turn, _, speaker in annotation.itertracks(yield_label=True):
-                speaker_segments.append((turn.start, turn.end, speaker))
-        elif hasattr(diarization, 'annotation'):
-            # DiarizeOutput has an annotation attribute
-            annotation = diarization.annotation
-            for turn, _, speaker in annotation.itertracks(yield_label=True):
-                speaker_segments.append((turn.start, turn.end, speaker))
-        elif hasattr(diarization, 'itertracks'):
-            # Direct Annotation object (older API)
-            for turn, _, speaker in diarization.itertracks(yield_label=True):
-                speaker_segments.append((turn.start, turn.end, speaker))
+                speaker_segments.append((float(turn.start), float(turn.end), str(speaker)))
         else:
-            # Try to iterate directly - might be iterable
-            try:
-                for turn, _, speaker in diarization:
-                    speaker_segments.append((turn.start, turn.end, speaker))
-            except (TypeError, ValueError):
-                logger.debug("Diarization type: %s, attributes: %s", type(diarization), dir(diarization))
-                raise ValueError(f"Unknown diarization output format: {type(diarization)}. Attributes: {[attr for attr in dir(diarization) if not attr.startswith('_')]}")
-
-        logger.info("Found %d speaker(s)", len(set(seg[2] for seg in speaker_segments)))
+            logger.warning(
+                "Could not parse diarization output (type=%s). Attributes: %s",
+                type(diarization).__name__,
+                [a for a in dir(diarization) if not a.startswith("_")],
+            )
+        if not speaker_segments:
+            logger.warning(
+                "Diarization produced no speaker segments. Try --num-speakers N or check audio."
+            )
+        logger.info(
+            "Found %d speaker segment(s), %d unique speaker(s)",
+            len(speaker_segments),
+            len(set(seg[2] for seg in speaker_segments)) if speaker_segments else 0,
+        )
         
-        # Clean up pipeline and tensors to free VRAM immediately
+        # Clean up pipeline to free VRAM
         if 'pipeline' in locals():
             del pipeline
-        if 'waveform_tensor' in locals():
-            del waveform_tensor
         if 'diarization' in locals():
             del diarization
         gc.collect()
@@ -518,58 +466,55 @@ def build_initial_prompt(metadata: Optional[Dict[str, str]] = None) -> str:
     return ", ".join(parts) + "."
 
 
-def match_speakers_to_segments(transcription_segments: List[Dict], 
+def match_speakers_to_segments(transcription_segments: List[Dict],
                                speaker_segments: List[Tuple[float, float, str]]) -> List[Dict]:
     """
     Match transcription segments with speaker labels based on timestamps.
-    
+
     Args:
         transcription_segments: List of transcription segments from Whisper
         speaker_segments: List of (start, end, speaker) tuples from diarization
-    
+
     Returns:
         List of segments with added 'speaker' field
     """
     if not speaker_segments:
         return transcription_segments
-    
-    # Create a list to store matched segments
+
     matched_segments = []
-    
+
     for trans_seg in transcription_segments:
-        trans_start = trans_seg["start"]
-        trans_end = trans_seg["end"]
+        trans_start = float(trans_seg.get("start", 0))
+        trans_end = float(trans_seg.get("end", trans_start + 0.1))
         trans_mid = (trans_start + trans_end) / 2
-        
+
         # Find the speaker segment that overlaps most with this transcription segment
         best_speaker = None
-        best_overlap = 0
-        
+        best_overlap = 0.0
+
         for spk_start, spk_end, speaker in speaker_segments:
-            # Calculate overlap
             overlap_start = max(trans_start, spk_start)
             overlap_end = min(trans_end, spk_end)
             overlap_duration = max(0, overlap_end - overlap_start)
-            
+
             if overlap_duration > best_overlap:
                 best_overlap = overlap_duration
                 best_speaker = speaker
-        
-        # If no overlap found, find the closest speaker segment
+
+        # If no overlap, use closest speaker by midpoint distance (handles timestamp drift)
         if best_speaker is None:
-            min_distance = float('inf')
+            min_distance = float("inf")
             for spk_start, spk_end, speaker in speaker_segments:
                 spk_mid = (spk_start + spk_end) / 2
                 distance = abs(trans_mid - spk_mid)
                 if distance < min_distance:
                     min_distance = distance
                     best_speaker = speaker
-        
-        # Add speaker label to segment
+
         matched_seg = trans_seg.copy()
         matched_seg["speaker"] = best_speaker if best_speaker else "UNKNOWN"
         matched_segments.append(matched_seg)
-    
+
     return matched_segments
 
 
