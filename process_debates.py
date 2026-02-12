@@ -13,23 +13,20 @@ from datetime import datetime
 # Add current directory to path to ensure imports work
 sys.path.append(os.getcwd())
 
+# Configure logging (before imports so logger works in except)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger("process_debates")
+
 try:
     from download_all_debates import download_all_debates, DOWNLOAD_FOLDER
     from transcribe_audio import transcribe_audio
 except ImportError as e:
-    print(f"Error importing modules: {e}")
-    print("Make sure download_all_debates.py and transcribe_audio.py are in the current directory.")
+    logger.error("Error importing modules: %s. Make sure download_all_debates.py and transcribe_audio.py are in the current directory.", e)
     sys.exit(1)
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger("process_debates")
 
 # Error logging configuration
 ERROR_LOG_FILE = "error_log.txt"

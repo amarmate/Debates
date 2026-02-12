@@ -4,8 +4,11 @@ Regenerate data/links/debates_unified.csv from the per-election CSVs.
 """
 
 import csv
+import logging
 import uuid
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 SOURCE_FILES = [
     ("legislativas", Path("data/links/legislativas_debates_2025.csv")),
@@ -47,7 +50,7 @@ def main() -> int:
                     "url": url,
                 })
     if not rows:
-        print("No rows to write.")
+        logger.info("No rows to write.")
         return 0
     UNIFIED_PATH.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = ["uuid", "year", "date", "party1", "party2", "candidate1", "candidate2", "type", "channel", "url"]
@@ -55,9 +58,14 @@ def main() -> int:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         w.writerows(rows)
-    print(f"Wrote {len(rows)} rows to {UNIFIED_PATH}")
+    logger.info("Wrote %d rows to %s", len(rows), UNIFIED_PATH)
     return 0
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
     raise SystemExit(main())

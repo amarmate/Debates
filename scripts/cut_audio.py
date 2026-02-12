@@ -4,9 +4,12 @@ Script to cut MP3 audio files.
 Supports cutting by start/end time or start time and duration.
 """
 
-import sys
+import logging
 import os
+import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 from pydub import AudioSegment
 
 
@@ -54,9 +57,9 @@ def cut_audio(input_path: str, start_time: str = None, end_time: str = None,
         output_path: Output file path. If None, auto-generates from input filename
     """
     if not os.path.exists(input_path):
-        print(f"Error: Audio file not found: {input_path}")
+        logger.error("Audio file not found: %s", input_path)
         return
-    
+
     # Parse times
     start_ms = 0
     if start_time:
@@ -65,40 +68,41 @@ def cut_audio(input_path: str, start_time: str = None, end_time: str = None,
     if end_time:
         end_ms = parse_time(end_time)
         if end_ms <= start_ms:
-            print(f"Error: End time must be greater than start time")
+            logger.error("End time must be greater than start time")
             return
     elif duration:
         duration_ms = parse_time(duration)
         end_ms = start_ms + duration_ms
     else:
-        print("Error: Must specify either end_time or duration")
+        logger.error("Must specify either end_time or duration")
         return
-    
-    print(f"Loading audio file: {input_path}")
+
+    logger.info("Loading audio file: %s", input_path)
     try:
         audio = AudioSegment.from_mp3(input_path)
     except Exception as e:
-        print(f"Error loading audio file: {e}")
-        print("\nNote: pydub requires ffmpeg to be installed for MP3 support.")
-        print("Install ffmpeg: https://ffmpeg.org/download.html")
+        logger.error(
+            "Error loading audio file: %s. pydub requires ffmpeg for MP3. Install: https://ffmpeg.org/download.html",
+            e,
+        )
         return
-    
+
     total_duration_ms = len(audio)
     total_duration_s = total_duration_ms / 1000
     
-    print(f"Audio duration: {total_duration_s:.2f} seconds ({total_duration_ms} ms)")
-    
+    logger.info("Audio duration: %.2f seconds (%d ms)", total_duration_s, total_duration_ms)
+
     # Validate times
     if start_ms >= total_duration_ms:
-        print(f"Error: Start time ({start_ms}ms) is beyond audio duration ({total_duration_ms}ms)")
+        logger.error("Start time (%dms) is beyond audio duration (%dms)", start_ms, total_duration_ms)
         return
-    
+
     if end_ms > total_duration_ms:
-        print(f"Warning: End time ({end_ms}ms) exceeds audio duration ({total_duration_ms}ms). Clipping to end.")
+        logger.warning("End time (%dms) exceeds audio duration (%dms). Clipping to end.", end_ms, total_duration_ms)
         end_ms = total_duration_ms
     
     # Cut the audio
-    print(f"\nCutting audio from {start_ms}ms to {end_ms}ms...")
+    logger.info("Cutting audio from %dms to %dms...", start_ms, end_ms)
     cut_audio_segment = audio[start_ms:end_ms]
     
     # Generate output path if not provided
@@ -109,41 +113,36 @@ def cut_audio(input_path: str, start_time: str = None, end_time: str = None,
         output_path = input_file.parent / f"{input_file.stem}_cut_{start_s:.1f}s-{end_s:.1f}s{input_file.suffix}"
     
     # Export
-    print(f"Exporting to: {output_path}")
+    logger.info("Exporting to: %s", output_path)
     try:
         cut_audio_segment.export(output_path, format="mp3")
     except Exception as e:
-        print(f"Error exporting audio: {e}")
+        logger.error("Error exporting audio: %s", e)
         return
-    
+
     cut_duration_s = len(cut_audio_segment) / 1000
-    print(f"\n✓ Successfully cut audio!")
-    print(f"  Original duration: {total_duration_s:.2f} seconds")
-    print(f"  Cut duration: {cut_duration_s:.2f} seconds")
-    print(f"  Output file: {output_path}")
+    logger.info("Successfully cut audio! Original: %.2fs, Cut: %.2fs, Output: %s", total_duration_s, cut_duration_s, output_path)
 
 
-def print_usage():
-    """Print usage information"""
-    print("=" * 80)
-    print("MP3 Audio Cutter")
-    print("=" * 80)
-    print("\nUsage:")
-    print("  uv run python scripts/cut_audio.py <input_file> [options]")
-    print("\nOptions:")
-    print("  --start TIME       Start time (MM:SS, HH:MM:SS, or seconds). Default: 0")
-    print("  --end TIME         End time (MM:SS, HH:MM:SS, or seconds)")
-    print("  --duration TIME    Duration from start (MM:SS, HH:MM:SS, or seconds)")
-    print("  --output FILE      Output file path (default: auto-generated)")
-    print("\nExamples:")
-    print("  uv run python scripts/cut_audio.py audio.mp3 --start 1:30 --end 3:45")
-    print("  uv run python scripts/cut_audio.py audio.mp3 --start 0:01:30 --duration 2:15")
-    print("=" * 80)
+def log_usage():
+    """Log usage information."""
+    logger.info("=" * 80)
+    logger.info("MP3 Audio Cutter")
+    logger.info("=" * 80)
+    logger.info("Usage: uv run python scripts/cut_audio.py <input_file> [options]")
+    logger.info("Options: --start TIME --end TIME --duration TIME --output FILE")
+    logger.info("Examples: uv run python scripts/cut_audio.py audio.mp3 --start 1:30 --end 3:45")
+    logger.info("=" * 80)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
     if len(sys.argv) < 2 or "--help" in sys.argv or "-h" in sys.argv:
-        print_usage()
+        log_usage()
         sys.exit(0)
     
     input_file = sys.argv[1]
@@ -169,13 +168,13 @@ if __name__ == "__main__":
             output_path = sys.argv[i + 1]
             i += 2
         else:
-            print(f"Unknown argument: {arg}")
-            print_usage()
+            logger.error("Unknown argument: %s", arg)
+            log_usage()
             sys.exit(1)
-    
+
     if not end_time and not duration:
-        print("Error: Must specify either --end or --duration")
-        print_usage()
+        logger.error("Must specify either --end or --duration")
+        log_usage()
         sys.exit(1)
     
     cut_audio(input_file, start_time, end_time, duration, output_path)

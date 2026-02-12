@@ -6,6 +6,7 @@ Runs the same pipeline as process_debates for a single debate.
 
 import argparse
 import csv
+import logging
 import sys
 from pathlib import Path
 
@@ -14,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from debate_downloader import get_debate_audio
 from download_all_debates import create_debate_title, create_debate_filename, DOWNLOAD_FOLDER
+
+logger = logging.getLogger(__name__)
 from transcribe_audio import transcribe_audio
 
 CSV_FILE = Path("data/links/debates_unified.csv")
@@ -25,7 +28,7 @@ def main() -> int:
     args = parser.parse_args()
     model_size = args.model
     if not CSV_FILE.exists():
-        print(f"Error: {CSV_FILE} not found")
+        logger.error("%s not found", CSV_FILE)
         return 1
 
     with open(CSV_FILE, "r", encoding="utf-8") as f:
@@ -33,24 +36,23 @@ def main() -> int:
         rows = [r for r in reader if (r.get("url") or "").strip().startswith("http")]
 
     if not rows:
-        print("No valid debate rows in CSV")
+        logger.error("No valid debate rows in CSV")
         return 1
 
     row = rows[0]
     url = row.get("url", "").strip()
     title = create_debate_title(row)
 
-    print("=" * 60)
-    print("TEST: First debate from debates_unified.csv")
-    print("=" * 60)
-    print(f"Debate: {title}")
-    print(f"URL: {url}")
-    print(f"Model: {model_size}")
-    print()
+    logger.info("=" * 60)
+    logger.info("TEST: First debate from debates_unified.csv")
+    logger.info("=" * 60)
+    logger.info("Debate: %s", title)
+    logger.info("URL: %s", url)
+    logger.info("Model: %s", model_size)
 
     # Download
     filename_base = create_debate_filename(row)
-    print("Step 1: Downloading...")
+    logger.info("Step 1: Downloading...")
     try:
         get_debate_audio(
             page_url=url,
@@ -60,27 +62,26 @@ def main() -> int:
             filename_base=filename_base,
         )
     except Exception as e:
-        print(f"Download failed: {e}")
+        logger.error("Download failed: %s", e)
         return 1
 
     # Find the downloaded file: prefer one matching our filename_base, else most recent
     if not DOWNLOAD_FOLDER.exists():
-        print("Error: Download folder not found")
+        logger.error("Download folder not found")
         return 1
 
     matches = list(DOWNLOAD_FOLDER.glob(f"{filename_base}.mp3"))
     if not matches:
         matches = sorted(DOWNLOAD_FOLDER.glob("*.mp3"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not matches:
-        print("Error: No MP3 files found in download folder")
+        logger.error("No MP3 files found in download folder")
         return 1
 
     audio_path = matches[0]
-    print(f"Downloaded: {audio_path}")
-    print()
+    logger.info("Downloaded: %s", audio_path)
 
     # Transcribe
-    print("Step 2: Transcribing...")
+    logger.info("Step 2: Transcribing...")
     try:
         transcribe_audio(
             str(audio_path),
@@ -93,18 +94,22 @@ def main() -> int:
             enable_overlap_detection=True,
         )
     except Exception as e:
-        print(f"Transcription failed: {e}")
+        logger.error("Transcription failed: %s", e)
         return 1
 
     txt_path = audio_path.parent / f"{audio_path.stem}_{model_size}.txt"
-    print()
-    print("=" * 60)
-    print("Done!")
-    print(f"Audio: {audio_path}")
-    print(f"Transcript: {txt_path}")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Done!")
+    logger.info("Audio: %s", audio_path)
+    logger.info("Transcript: %s", txt_path)
+    logger.info("=" * 60)
     return 0
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
     sys.exit(main())

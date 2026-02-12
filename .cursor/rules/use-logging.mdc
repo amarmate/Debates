@@ -1,0 +1,51 @@
+---
+description: Always use logging instead of print for output
+alwaysApply: true
+---
+
+# Use Logging, Not Print
+
+Never use `print()` for output. Always use the `logging` module.
+
+## Setup
+
+```python
+import logging
+
+logger = logging.getLogger(__name__)
+```
+
+For scripts run directly, configure logging at entry point:
+
+```python
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+```
+
+## Usage
+
+| Use case | Method |
+|----------|--------|
+| Progress, info | `logger.info("message %s", arg)` |
+| Warnings | `logger.warning("message %s", arg)` |
+| Errors | `logger.error("message %s", arg)` |
+| Exceptions with traceback | `logger.exception("message %s", e)` |
+| Debug | `logger.debug("message %s", arg)` |
+
+## Examples
+
+```python
+# ❌ BAD
+print(f"Loaded: {path}")
+print("Warning: something failed")
+
+# ✅ GOOD
+logger.info("Loaded: %s", path)
+logger.warning("Something failed: %s", error)
+```
+
+Use `%s` style formatting in log calls (not f-strings) for efficiency—arguments are only formatted if the message is emitted.

@@ -1,8 +1,13 @@
-import requests
-from bs4 import BeautifulSoup
-import pandas as pd
+import logging
 import re
 from datetime import datetime
+
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
 
 url = "https://cnnportugal.iol.pt/presidenciais-2026/calendario-dos-debates/calendario-dos-debates-das-presidenciais-de-2026-todos-os-frente-a-frente/20251119/691df9a6d34e3caad84b764f"
 headers = {'User-Agent': 'Mozilla/5.0'}
@@ -44,7 +49,7 @@ def parse_portuguese_date(date_str, year=2025):
     return date_clean
 
 if article is None:
-    print("Could not find article content")
+    logger.error("Could not find article content")
     exit(1)
 
 for element in article.find_all(['p', 'h2', 'h3', 'strong']):
@@ -92,5 +97,5 @@ for element in article.find_all(['p', 'h2', 'h3', 'strong']):
         })
 
 df = pd.DataFrame(data)
-df.to_csv('presidencial_debates_2026.csv', index=False)
-print(df.head())
+df.to_csv("presidencial_debates_2026.csv", index=False)
+logger.info("Preview:\n%s", df.head())

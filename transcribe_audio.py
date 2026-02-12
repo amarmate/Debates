@@ -8,12 +8,15 @@ import os
 # Set PyTorch memory allocation configuration to avoid fragmentation
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 
+import logging
 import torch
 import gc
 import whisper
 import sys
 import csv
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 from tqdm import tqdm
 import librosa
 import numpy as np
@@ -95,18 +98,17 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
         from pyannote.audio import Pipeline
         from pyannote.core import Annotation
     except ImportError:
-        print("\nError: pyannote.audio is not installed or not accessible.")
-        print("\nIf you're using uv (you have uv.lock file):")
-        print("  Run the script with: uv run python transcribe_audio.py <audio_file>")
-        print("\nIf you're using pip:")
-        print("  Install with: pip install pyannote.audio")
-        print("\nYou also need a Hugging Face token to access the models:")
-        print("  1. Get one at: https://huggingface.co/settings/tokens")
-        print("  2. Authenticate: huggingface-cli login")
-        print("  3. Accept model terms: https://huggingface.co/pyannote/speaker-diarization-3.1")
+        logger.error(
+            "pyannote.audio is not installed or not accessible. "
+            "If using uv: uv run python transcribe_audio.py <audio_file>. "
+            "If using pip: pip install pyannote.audio. "
+            "Get Hugging Face token at https://huggingface.co/settings/tokens, "
+            "run huggingface-cli login, accept terms at "
+            "https://huggingface.co/pyannote/speaker-diarization-3.1"
+        )
         return None
-    
-    print("\nLoading speaker diarization model...")
+
+    logger.info("Loading speaker diarization model...")
     try:
         # Load the pre-trained speaker diarization pipeline
         # This requires a Hugging Face token - the model will prompt if needed
@@ -126,18 +128,19 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
         # Move pipeline to GPU if available for faster processing
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         pipeline.to(device)
-        print(f"Pipeline loaded on device: {device}")
-        
+        logger.info("Pipeline loaded on device: %s", device)
+
     except Exception as e:
-        print(f"Error loading diarization model: {e}")
-        print("\nMake sure you have:")
-        print("1. Installed pyannote.audio: pip install pyannote.audio")
-        print("2. A Hugging Face token (get one at https://huggingface.co/settings/tokens)")
-        print("3. Authenticated: huggingface-cli login")
-        print("4. Accepted the model terms at https://huggingface.co/pyannote/speaker-diarization-3.1")
+        logger.error(
+            "Error loading diarization model: %s. "
+            "Make sure you have: 1) pip install pyannote.audio "
+            "2) Hugging Face token 3) huggingface-cli login "
+            "4) Accepted model terms at https://huggingface.co/pyannote/speaker-diarization-3.1",
+            e,
+        )
         return None
-    
-    print("Performing speaker diarization...")
+
+    logger.info("Performing speaker diarization...")
     try:
         # Load audio manually to avoid torchcodec/AudioDecoder issues on Windows
         # pyannote.audio 3.1+ can accept memory inputs
@@ -145,7 +148,7 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
             # OPTIMIZATION: Resample to 16kHz for faster processing
             # pyannote works well with 16kHz, and this reduces data by 3x for 48kHz audio
             target_sr = 16000
-            print(f"Loading audio and resampling to {target_sr}Hz for faster processing...")
+            logger.info("Loading audio and resampling to %sHz for faster processing...", target_sr)
             
             # Load with librosa and resample to 16kHz (much faster than 48kHz)
             waveform, original_sr = librosa.load(audio_path, sr=None, mono=True)
@@ -154,7 +157,10 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
             if original_sr != target_sr:
                 waveform = librosa.resample(waveform, orig_sr=original_sr, target_sr=target_sr)
                 sample_rate = target_sr
-                print(f"Resampled from {original_sr}Hz to {target_sr}Hz (reduced by {original_sr/target_sr:.1f}x)")
+                logger.info(
+                    "Resampled from %sHz to %sHz (reduced by %.1fx)",
+                    original_sr, target_sr, original_sr / target_sr,
+                )
             else:
                 sample_rate = original_sr
             
@@ -178,11 +184,13 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
             
             audio_input = {"waveform": waveform_tensor, "sample_rate": sample_rate}
             duration = waveform_tensor.shape[1] / sample_rate
-            print(f"Loaded audio into memory: shape={waveform_tensor.shape}, sr={sample_rate}, duration={duration:.1f}s")
+            logger.info(
+                "Loaded audio into memory: shape=%s, sr=%s, duration=%.1fs",
+                waveform_tensor.shape, sample_rate, duration,
+            )
             
         except Exception as e:
-            print(f"Warning: Failed to load audio into memory: {e}")
-            print("Falling back to file path input (may fail if torchcodec is missing)...")
+            logger.warning("Failed to load audio into memory: %s. Falling back to file path input.", e)
             audio_input = {"audio": audio_path}
 
         # OPTIMIZATION: Use min_duration_off to skip very short silence segments (speeds up processing)
@@ -195,7 +203,7 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
             diarization_params["num_speakers"] = num_speakers
         
         # Show progress indicator for long-running diarization
-        print("Processing diarization (this may take a while for long audio files)...")
+        logger.info("Processing diarization (this may take a while for long audio files)...")
         start_time = time.time()
         
         # Run diarization in a thread with progress updates
@@ -212,20 +220,22 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
         diarization_thread.start()
         
         # Show progress while diarization runs
+        last_logged = 0
         while diarization_thread.is_alive():
             elapsed = time.time() - start_time
-            print(f"\r  Elapsed: {elapsed:.1f}s...", end="", flush=True)
+            if int(elapsed) - last_logged >= 10 or int(elapsed) == 0:
+                logger.info("  Elapsed: %.1fs...", elapsed)
+                last_logged = int(elapsed)
             time.sleep(1)
-        
+
         diarization_thread.join()
-        print()  # New line after progress
         
         if diarization_error[0]:
             raise diarization_error[0]
         
         diarization = diarization_result[0]
         elapsed_time = time.time() - start_time
-        print(f"Diarization completed in {elapsed_time:.1f}s")
+        logger.info("Diarization completed in %.1fs", elapsed_time)
         
         # Extract speaker segments
         # Handle different API versions of pyannote.audio
@@ -252,12 +262,10 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
                 for turn, _, speaker in diarization:
                     speaker_segments.append((turn.start, turn.end, speaker))
             except (TypeError, ValueError):
-                # Debug: print what we actually have
-                print(f"Debug: diarization type = {type(diarization)}")
-                print(f"Debug: diarization attributes = {dir(diarization)}")
+                logger.debug("Diarization type: %s, attributes: %s", type(diarization), dir(diarization))
                 raise ValueError(f"Unknown diarization output format: {type(diarization)}. Attributes: {[attr for attr in dir(diarization) if not attr.startswith('_')]}")
-        
-        print(f"Found {len(set(seg[2] for seg in speaker_segments))} speaker(s)")
+
+        logger.info("Found %d speaker(s)", len(set(seg[2] for seg in speaker_segments)))
         
         # Clean up pipeline and tensors to free VRAM immediately
         if 'pipeline' in locals():
@@ -273,9 +281,7 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
         return speaker_segments
         
     except Exception as e:
-        print(f"Error during diarization: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception("Error during diarization: %s", e)
         return None
 
 
@@ -291,7 +297,7 @@ def perform_vad(audio_path: str, threshold: float = 0.5):
     Returns:
         List of tuples: [(start_time, end_time), ...] for speech segments
     """
-    print("\nPerforming Voice Activity Detection (VAD)...")
+    logger.info("Performing Voice Activity Detection (VAD)...")
     try:
         # Load Silero VAD model from PyTorch Hub
         model, utils = torch.hub.load(
@@ -327,8 +333,10 @@ def perform_vad(audio_path: str, threshold: float = 0.5):
         total_duration = len(wav) / sampling_rate
         speech_percentage = (total_speech_duration / total_duration * 100) if total_duration > 0 else 0
         
-        print(f"VAD detected {len(speech_segments)} speech segments")
-        print(f"Speech duration: {total_speech_duration:.1f}s / {total_duration:.1f}s ({speech_percentage:.1f}%)")
+        logger.info(
+            "VAD detected %d speech segments. Speech duration: %.1fs / %.1fs (%.1f%%)",
+            len(speech_segments), total_speech_duration, total_duration, speech_percentage,
+        )
         
         # Clean up
         del model, wav
@@ -339,10 +347,7 @@ def perform_vad(audio_path: str, threshold: float = 0.5):
         return speech_segments
         
     except Exception as e:
-        print(f"Warning: VAD failed: {e}")
-        print("Continuing without VAD filtering...")
-        import traceback
-        traceback.print_exc()
+        logger.warning("VAD failed: %s. Continuing without VAD filtering...", e, exc_info=True)
         return None
 
 
@@ -541,10 +546,10 @@ def perform_overlap_detection(audio_path: str) -> List[Tuple[float, float]]:
     try:
         from pyannote.audio import Pipeline
     except ImportError:
-        print("Warning: pyannote.audio not available for overlap detection.")
+        logger.warning("pyannote.audio not available for overlap detection.")
         return []
 
-    print("\nLoading overlapped speech detection model...")
+    logger.info("Loading overlapped speech detection model...")
     try:
         try:
             pipeline = Pipeline.from_pretrained(
@@ -559,8 +564,11 @@ def perform_overlap_detection(audio_path: str) -> List[Tuple[float, float]]:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         pipeline.to(device)
     except Exception as e:
-        print(f"Warning: Could not load overlap model: {e}")
-        print("Visit https://huggingface.co/pyannote/overlapped-speech-detection to accept terms.")
+        logger.warning(
+            "Could not load overlap model: %s. Visit "
+            "https://huggingface.co/pyannote/overlapped-speech-detection to accept terms.",
+            e,
+        )
         return []
 
     try:
@@ -585,14 +593,14 @@ def perform_overlap_detection(audio_path: str) -> List[Tuple[float, float]]:
         elif hasattr(output, "itertracks"):
             for segment, _, _ in output.itertracks(yield_label=True):
                 segments.append((float(segment.start), float(segment.end)))
-        print(f"Detected {len(segments)} overlapped speech region(s)")
+        logger.info("Detected %d overlapped speech region(s)", len(segments))
         del pipeline
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         return segments
     except Exception as e:
-        print(f"Warning: Overlap detection failed: {e}")
+        logger.warning("Overlap detection failed: %s", e)
         return []
 
 
@@ -621,17 +629,17 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
         initial_prompt: Optional initial prompt to guide transcription and reduce hallucinations
     """
     if not os.path.exists(audio_path):
-        print(f"Error: Audio file not found: {audio_path}")
+        logger.error("Audio file not found: %s", audio_path)
         return
-    
+
     # Get audio duration for progress tracking
-    print("Loading audio file to get duration...")
+    logger.info("Loading audio file to get duration...")
     try:
         duration = librosa.get_duration(path=audio_path)
         duration_str = f"{int(duration // 60)}m {int(duration % 60)}s"
-        print(f"Audio duration: {duration_str} ({duration:.1f} seconds)")
+        logger.info("Audio duration: %s (%.1f seconds)", duration_str, duration)
     except Exception as e:
-        print(f"Warning: Could not get audio duration: {e}")
+        logger.warning("Could not get audio duration: %s", e)
         duration = None
     
     # Perform VAD if enabled
@@ -639,9 +647,9 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
     if enable_vad:
         vad_segments = perform_vad(audio_path)
         if vad_segments is None:
-            print("Continuing without VAD filtering...")
-    
-    print(f"\nLoading Whisper model '{model_size}'...")
+            logger.info("Continuing without VAD filtering...")
+
+    logger.info("Loading Whisper model '%s'...", model_size)
     model = whisper.load_model(model_size)
     
     # Look up metadata from CSV files if prompt not provided
@@ -649,11 +657,14 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
         metadata = lookup_debate_metadata(audio_path)
         initial_prompt = build_initial_prompt(metadata)
         if metadata:
-            print(f"Found metadata: {metadata.get('candidate1', '')} vs {metadata.get('candidate2', '')} ({metadata.get('date', '')})")
-    
-    print(f"\nStarting transcription...")
+            logger.info(
+                "Found metadata: %s vs %s (%s)",
+                metadata.get("candidate1", ""), metadata.get("candidate2", ""), metadata.get("date", ""),
+            )
+
+    logger.info("Starting transcription...")
     if initial_prompt:
-        print(f"Using initial prompt: {initial_prompt[:100]}...")
+        logger.info("Using initial prompt: %s...", initial_prompt[:100])
     
     # Use progress context manager
     with TranscriptionProgress(duration, model_size) as progress:
@@ -687,7 +698,7 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
     
     # Filter transcription segments using VAD if available
     if vad_segments and result.get("segments"):
-        print("\nFiltering transcription segments using VAD...")
+        logger.info("Filtering transcription segments using VAD...")
         original_count = len(result["segments"])
         filtered_segments = []
         
@@ -708,7 +719,7 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
         
         result["segments"] = filtered_segments
         filtered_count = len(filtered_segments)
-        print(f"Filtered {original_count} segments to {filtered_count} speech segments")
+        logger.info("Filtered %d segments to %d speech segments", original_count, filtered_count)
         
         # Rebuild full text from filtered segments
         result["text"] = " ".join(seg["text"].strip() for seg in filtered_segments)
@@ -718,14 +729,12 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
     if enable_diarization:
         speaker_segments = perform_speaker_diarization(audio_path, num_speakers)
         if speaker_segments is None:
-            print("\nWARNING: Speaker diarization failed or is not available.")
-            print("   All segments will be labeled as 'UNKNOWN'.")
-            print("   To enable speaker identification:")
-            print("   1. Install pyannote.audio: pip install pyannote.audio")
-            print("   2. Get a Hugging Face token: https://huggingface.co/settings/tokens")
-            print("   3. Authenticate: huggingface-cli login")
-            print("   4. Accept model terms: https://huggingface.co/pyannote/speaker-diarization-3.1")
-            print("   Or run with --no-diarization to disable speaker identification.\n")
+            logger.warning(
+                "Speaker diarization failed or is not available. All segments will be labeled as 'UNKNOWN'. "
+                "To enable: pip install pyannote.audio, Hugging Face token, huggingface-cli login, "
+                "accept terms at https://huggingface.co/pyannote/speaker-diarization-3.1. "
+                "Or run with --no-diarization to disable."
+            )
     
     # Match speakers to transcription segments
     segments = result.get("segments", [])
@@ -788,30 +797,27 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(annotated_text)
     
-    print(f"\nTranscription complete!")
-    print(f"Text saved to: {output_path}")
-    
+    logger.info("Transcription complete! Text saved to: %s", output_path)
+
     if speaker_segments:
         num_unique_speakers = len(set(seg.get("speaker", "UNKNOWN") for seg in segments))
-        print(f"Identified {num_unique_speakers} speaker(s)")
-    
-    print(f"\nTranscribed text ({len(annotated_text)} characters):")
-    print("-" * 80)
-    print(annotated_text)
-    print("-" * 80)
-    
-    # Also print segments with speaker labels if available
+        logger.info("Identified %d speaker(s)", num_unique_speakers)
+
+    logger.info("Transcribed text (%d characters):\n%s\n%s", len(annotated_text), "-" * 80, annotated_text)
+    logger.info("-" * 80)
+
+    # Also log segments with speaker labels if available
     if segments:
-        print(f"\nSegments with timestamps and speakers:")
+        logger.info("Segments with timestamps and speakers:")
         for segment in segments:
             start = segment["start"]
             end = segment["end"]
             speaker = segment.get("speaker", "UNKNOWN")
-            text = segment['text']
-            print(f"[{start:.1f}s - {end:.1f}s] [{speaker}]: {text}")
+            text = segment["text"]
+            logger.info("[%.1fs - %.1fs] [%s]: %s", start, end, speaker, text)
 
     # Clean up memory
-    print("\nCleaning up memory...")
+    logger.info("Cleaning up memory...")
     if 'model' in locals():
         del model
     gc.collect()
@@ -822,6 +828,12 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+
     # Check if pyannote.audio is available (for better error messages)
     pyannote_available = False
     try:
@@ -843,7 +855,7 @@ if __name__ == "__main__":
         try:
             num_speakers = int(sys.argv[3])
         except ValueError:
-            print(f"Warning: Invalid number of speakers '{sys.argv[3]}', using auto-detection")
+            logger.warning("Invalid number of speakers '%s', using auto-detection", sys.argv[3])
     
     # Optional: disable diarization with --no-diarization flag
     enable_diarization = "--no-diarization" not in sys.argv
@@ -879,33 +891,31 @@ if __name__ == "__main__":
             if prompt_idx + 1 < len(sys.argv):
                 initial_prompt = sys.argv[prompt_idx + 1]
         except (ValueError, IndexError):
-            print("Warning: --prompt flag provided but no prompt text found")
+            logger.warning("--prompt flag provided but no prompt text found")
     
     # Warn if diarization is enabled but pyannote is not available
     if enable_diarization and not pyannote_available:
         uv_lock_exists = Path("uv.lock").exists()
-        print("\nWARNING: pyannote.audio is not available in the current Python environment.")
-        if uv_lock_exists:
-            print("   You're using uv - run the script with: uv run python transcribe_audio.py <audio_file>")
-        else:
-            print("   Install with: pip install pyannote.audio")
-        print("   Speaker diarization will be disabled. All segments will be labeled as 'UNKNOWN'.\n")
-    
-    print("=" * 80)
-    print("Whisper Audio Transcription with Speaker Diarization")
-    print("=" * 80)
-    print(f"Audio file: {audio_file}")
-    print(f"Model: {model_size}")
-    print(f"Language: Portuguese (pt)")
-    print(f"Speaker diarization: {'Enabled' if enable_diarization else 'Disabled'}")
-    print(f"VAD (Voice Activity Detection): {'Enabled' if enable_vad else 'Disabled'}")
-    print(f"Overlap detection: {'Enabled' if enable_overlap_detection else 'Disabled'}")
+        logger.warning(
+            "pyannote.audio is not available. Speaker diarization will be disabled. "
+            "Run with: %s",
+            "uv run python transcribe_audio.py <audio_file>" if uv_lock_exists else "pip install pyannote.audio",
+        )
+
+    logger.info("=" * 80)
+    logger.info("Whisper Audio Transcription with Speaker Diarization")
+    logger.info("=" * 80)
+    logger.info("Audio file: %s", audio_file)
+    logger.info("Model: %s", model_size)
+    logger.info("Language: Portuguese (pt)")
+    logger.info("Speaker diarization: %s", "Enabled" if enable_diarization else "Disabled")
+    logger.info("VAD (Voice Activity Detection): %s", "Enabled" if enable_vad else "Disabled")
+    logger.info("Overlap detection: %s", "Enabled" if enable_overlap_detection else "Disabled")
     if initial_prompt:
-        print(f"Initial prompt: {initial_prompt[:80]}...")
+        logger.info("Initial prompt: %s...", initial_prompt[:80])
     if num_speakers:
-        print(f"Number of speakers: {num_speakers}")
-    print("=" * 80)
-    print()
+        logger.info("Number of speakers: %s", num_speakers)
+    logger.info("=" * 80)
     
     transcribe_audio(
         audio_file,

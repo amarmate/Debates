@@ -1,8 +1,13 @@
-import requests
-from bs4 import BeautifulSoup
-import pandas as pd
+import logging
 import re
 from datetime import datetime
+
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
 
 url = "https://cnnportugal.iol.pt/decisao-25/calendario-dos-debates/calendario-dos-debates-das-legislativas-de-2025-veja-aqui-quando-e-onde/20250417/67f4e39dd34ef72ee44472ff"
 headers = {'User-Agent': 'Mozilla/5.0'}
@@ -44,7 +49,7 @@ def parse_portuguese_date(date_str, year=2025):
     return date_clean
 
 if article is None:
-    print("Could not find article content")
+    logger.error("Could not find article content")
     exit(1)
 
 for element in article.find_all(['p', 'h2', 'h3', 'strong', 'li']):
@@ -93,6 +98,6 @@ for element in article.find_all(['p', 'h2', 'h3', 'strong', 'li']):
 
 df = pd.DataFrame(data)
 # Remove duplicates based on URL (same debate might appear in both <li> and <strong> elements)
-df = df.drop_duplicates(subset=['url'], keep='first')
-df.to_csv('legislativas_debates_2025.csv', index=False)
-print(df.head())
+df = df.drop_duplicates(subset=["url"], keep="first")
+df.to_csv("legislativas_debates_2025.csv", index=False)
+logger.info("Preview:\n%s", df.head())

@@ -6,7 +6,10 @@ Computes WER (Word Error Rate) and CER (Character Error Rate) for evaluation.
 
 import argparse
 import json
+import logging
 import sys
+
+logger = logging.getLogger(__name__)
 from pathlib import Path
 from datetime import datetime
 
@@ -88,26 +91,24 @@ def main() -> int:
     if args.audio and args.ref:
         pairs = [(args.audio, args.ref)]
         if not args.audio.exists():
-            print(f"Error: Audio file not found: {args.audio}", file=sys.stderr)
+            logger.error("Audio file not found: %s", args.audio)
             return 1
         if not args.ref.exists():
-            print(f"Error: Reference file not found: {args.ref}", file=sys.stderr)
+            logger.error("Reference file not found: %s", args.ref)
             return 1
     else:
         pairs = discover_benchmark_pairs(args.audio_dir, args.ref_dir)
         if not pairs:
-            print("No benchmark pairs found.")
-            print(f"  Add reference transcripts to {args.ref_dir}")
-            print(f"  (e.g. 2025_04_07_AD_CDU.txt for 2025_04_07_AD_CDU.mp3 in {args.audio_dir})")
+            logger.info("No benchmark pairs found. Add reference transcripts to %s (e.g. 2025_04_07_AD_CDU.txt for 2025_04_07_AD_CDU.mp3 in %s)", args.ref_dir, args.audio_dir)
             return 0
 
-    print(f"Found {len(pairs)} benchmark pair(s)")
-    print(f"Model: {args.model}\n")
+    logger.info("Found %d benchmark pair(s)", len(pairs))
+    logger.info("Model: %s", args.model)
 
     results = []
     total_wer = total_cer = 0.0
     for i, (audio_path, ref_path) in enumerate(pairs):
-        print(f"[{i + 1}/{len(pairs)}] {audio_path.name} ...")
+        logger.info("[%d/%d] %s ...", i + 1, len(pairs), audio_path.name)
         _, _, w, c = run_benchmark(
             audio_path, ref_path,
             model_size=args.model,
@@ -117,17 +118,17 @@ def main() -> int:
         total_wer += w
         total_cer += c
         results.append({"audio": str(audio_path), "reference": str(ref_path), "wer": w, "cer": c})
-        print(f"  WER: {w:.4f}  CER: {c:.4f}")
+        logger.info("  WER: %.4f  CER: %.4f", w, c)
 
     n = len(results)
     avg_wer = total_wer / n if n else 0.0
     avg_cer = total_cer / n if n else 0.0
 
-    print("\n" + "=" * 60)
-    print(f"SUMMARY (n={n})")
-    print(f"  Average WER: {avg_wer:.4f}")
-    print(f"  Average CER: {avg_cer:.4f}")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("SUMMARY (n=%d)", n)
+    logger.info("  Average WER: %.4f", avg_wer)
+    logger.info("  Average CER: %.4f", avg_cer)
+    logger.info("=" * 60)
 
     out_path = args.output or BENCHMARK_RESULTS / f"benchmark_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -136,9 +137,14 @@ def main() -> int:
             {"timestamp": datetime.now().isoformat(), "model": args.model, "n": n, "avg_wer": avg_wer, "avg_cer": avg_cer, "results": results},
             f, indent=2, ensure_ascii=False,
         )
-    print(f"Results saved to {out_path}")
+    logger.info("Results saved to %s", out_path)
     return 0
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
     sys.exit(main())
