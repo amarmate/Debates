@@ -101,10 +101,10 @@ def main():
 
     for i, audio_file in enumerate(audio_files, 1):
         try:
-            txt_file = audio_file.with_suffix(".txt")
-            
+            txt_file = audio_file.parent / f"{audio_file.stem}_{args.model}.txt"
+
             logger.info(f"\nProcessing {i}/{len(audio_files)}: {audio_file.name}")
-            
+
             if txt_file.exists():
                 logger.info(f"⏭️  Transcript already exists, skipping: {txt_file.name}")
                 skipped_count += 1

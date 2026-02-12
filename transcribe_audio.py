@@ -389,13 +389,10 @@ def lookup_debate_metadata(audio_path: str) -> Optional[Dict[str, str]]:
 
                 if not date_str or len(date_str) < 10:
                     continue
-                try:
-                    date_obj = datetime.strptime(date_str[:10], "%Y-%m-%d")
-                    formatted_date = date_obj.strftime("%Y_%m_%d")
-                except ValueError:
-                    continue
-
-                if not filename.startswith(formatted_date.lower()):
+                # Match both YYYY-MM-DD (new format) and YYYY_MM_DD (legacy)
+                date_prefix = date_str[:10].lower()  # 2025-04-07
+                date_prefix_alt = date_str[:10].replace("-", "_").lower()  # 2025_04_07
+                if not filename.startswith(date_prefix) and not filename.startswith(date_prefix_alt):
                     continue
 
                 metadata = {
@@ -785,8 +782,9 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
     else:
         annotated_text = result["text"]
     
-    # Save annotated text to file
-    output_path = Path(audio_path).with_suffix('.txt')
+    # Save annotated text to file (include model in filename, e.g. debate_base.txt)
+    audio_file = Path(audio_path)
+    output_path = audio_file.parent / f"{audio_file.stem}_{model_size}.txt"
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(annotated_text)
     

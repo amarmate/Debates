@@ -362,15 +362,16 @@ def calculate_url_score(url, video_id):
     
     return score
 
-def get_debate_audio(page_url=None, download_audio_only=None, audio_format=None, title=None):
+def get_debate_audio(page_url=None, download_audio_only=None, audio_format=None, title=None, filename_base=None):
     """
     Download debate audio/video from a given URL
-    
+
     Args:
         page_url: URL of the debate page (defaults to PAGE_URL global)
         download_audio_only: Whether to download audio only (defaults to DOWNLOAD_AUDIO_ONLY global)
         audio_format: Audio format for extraction (defaults to AUDIO_FORMAT global)
         title: Optional title for the debate. If not provided, will be extracted automatically from the page
+        filename_base: Optional clean filename base (no spaces, no extension). When provided, used for output file.
     """
     # Use parameters or fall back to global defaults
     page_url = page_url or PAGE_URL
@@ -528,19 +529,22 @@ def get_debate_audio(page_url=None, download_audio_only=None, audio_format=None,
             formatted_date = datetime.now().strftime("%Y_%m_%d")
         if not sanitized_title:
             sanitized_title = "debate"
-        
+
+        # Use clean filename_base when provided (no spaces), else formatted_date_title
+        file_base = filename_base if filename_base else f"{formatted_date}_{sanitized_title}"
+
         # Format temp filename (download to temp first) - use absolute paths
         # Use %(ext)s for temp so FFmpegExtractAudio produces name.mp3, not name.mp3.mp3
         if download_audio_only:
-            temp_file_path = temp_dir / f"{formatted_date}_{sanitized_title}.%(ext)s"
-            final_file_path = download_dir / f"{formatted_date}_{sanitized_title}.{audio_format}"
+            temp_file_path = temp_dir / f"{file_base}.%(ext)s"
+            final_file_path = download_dir / f"{file_base}.{audio_format}"
             temp_filename = str(temp_file_path.absolute())
             final_filename = str(final_file_path.absolute())
         else:
-            temp_file_path = temp_dir / f"{formatted_date}_{sanitized_title}.%(ext)s"
+            temp_file_path = temp_dir / f"{file_base}.%(ext)s"
             temp_filename = str(temp_file_path.absolute())
             final_filename = None  # Will be determined after download based on actual file extension
-        
+
         logger.info(f"💾 Temp filename: {temp_filename}")
         if download_audio_only:
             logger.info(f"💾 Final filename: {final_filename}")
@@ -610,7 +614,7 @@ def get_debate_audio(page_url=None, download_audio_only=None, audio_format=None,
                     logger.error("❌ Final filename not set for audio download")
                     return
                 # FFmpegExtractAudio outputs to name.mp3 (outtmpl uses %(ext)s)
-                temp_file = temp_dir / f"{formatted_date}_{sanitized_title}.{audio_format}"
+                temp_file = temp_dir / f"{file_base}.{audio_format}"
                 if temp_file.exists():
                     final_file = Path(final_filename)
                     # Ensure final directory exists
@@ -620,7 +624,7 @@ def get_debate_audio(page_url=None, download_audio_only=None, audio_format=None,
                 else:
                     logger.warning(f"⚠️  Temp file not found: {temp_file}")
                     # Try to find any file that was created
-                    matching_files = list(temp_dir.glob(f"{formatted_date}_{sanitized_title}.*"))
+                    matching_files = list(temp_dir.glob(f"{file_base}.*"))
                     if matching_files:
                         logger.info(f"   Found alternative file: {matching_files[0]}")
                         temp_file = matching_files[0]
@@ -630,8 +634,8 @@ def get_debate_audio(page_url=None, download_audio_only=None, audio_format=None,
                         logger.info(f"✅ File moved to: {final_file}")
             else:
                 # Video file - need to find the actual file (ext might vary)
-                temp_file_pattern = temp_dir / f"{formatted_date}_{sanitized_title}.*"
-                matching_files = list(temp_dir.glob(f"{formatted_date}_{sanitized_title}.*"))
+                temp_file_pattern = temp_dir / f"{file_base}.*"
+                matching_files = list(temp_dir.glob(f"{file_base}.*"))
                 if matching_files:
                     temp_file = matching_files[0]
                     final_file = download_dir / temp_file.name

@@ -15,6 +15,31 @@ CSV_FILE = "data/links/debates_unified.csv"
 DOWNLOAD_FOLDER = Path("data/debates")
 SKIP_EXISTING = True  # Skip debates that already exist
 
+def create_debate_filename(row):
+    """
+    Create a clean filename base (no spaces, no extension) for the debate.
+
+    Format: YYYY-MM-DD_Party1-vs-Party2_Channel
+    Example: 2025-04-07_AD-vs-CDU_TVI
+    """
+    parts = []
+    date_str = (row.get("date") or "").strip()
+    if date_str and len(date_str) >= 10:
+        parts.append(date_str[:10])  # YYYY-MM-DD
+    name1 = str(row.get("party1") or row.get("candidate1") or "").strip()
+    name2 = str(row.get("party2") or row.get("candidate2") or "").strip()
+    if name1 and name2:
+        parts.append(f"{name1}-vs-{name2}")
+    elif name1:
+        parts.append(name1)
+    elif name2:
+        parts.append(name2)
+    channel = (row.get("channel") or "").strip()
+    if channel:
+        parts.append(sanitize_filename(channel).replace(" ", "_"))
+    return "_".join(parts) if parts else "debate"
+
+
 def create_debate_title(row):
     """
     Create a nice title for the debate from CSV row data
@@ -59,39 +84,40 @@ def create_debate_title(row):
     
     return title
 
-def check_already_downloaded(title, date_str=None):
+def check_already_downloaded(title, date_str=None, filename_base=None):
     """
-    Check if a debate with this title already exists in the download folder
+    Check if a debate already exists in the download folder.
+    Prefers filename_base (clean format) when provided.
     """
     if not SKIP_EXISTING:
         return False
-    
+
     if not DOWNLOAD_FOLDER.exists():
         return False
-    
-    # Format date for filename matching
+
+    if filename_base:
+        pattern = f"{filename_base}.*"
+        for file in DOWNLOAD_FOLDER.glob(pattern):
+            if file.is_file():
+                return True
+        return False
+
+    # Legacy: match by formatted_date + sanitized_title
     if date_str:
         try:
-            date_obj = datetime.strptime(str(date_str), '%Y-%m-%d')
+            date_obj = datetime.strptime(str(date_str), "%Y-%m-%d")
             formatted_date = date_obj.strftime("%Y_%m_%d")
-        except:
+        except Exception:
             formatted_date = None
     else:
         formatted_date = None
-    
-    # Check for existing files
+
     sanitized_title = sanitize_filename(title)
-    
-    # Look for files that match the pattern
-    if formatted_date:
-        pattern = f"{formatted_date}_{sanitized_title}.*"
-    else:
-        pattern = f"*{sanitized_title}*"
-    
+    pattern = f"{formatted_date}_{sanitized_title}.*" if formatted_date else f"*{sanitized_title}*"
     for file in DOWNLOAD_FOLDER.glob(pattern):
         if file.is_file():
             return True
-    
+
     return False
 
 def download_all_debates(csv_file=None, download_audio_only=True, audio_format="mp3"):
@@ -135,28 +161,30 @@ def download_all_debates(csv_file=None, download_audio_only=True, audio_format="
     failed = 0
     
     for idx, row in enumerate(valid_rows):
-        url = str(row.get('url', '')).strip()
+        url = str(row.get("url", "")).strip()
         title = create_debate_title(row)
-        date_str = row.get('date', '').strip() if row.get('date') else None
-        
+        filename_base = create_debate_filename(row)
+        date_str = row.get("date", "").strip() if row.get("date") else None
+
         logger.info("=" * 80)
         logger.info(f"📥 Debate {idx + 1}/{len(valid_rows)}: {title}")
         logger.info(f"🔗 URL: {url}")
-        
+
         # Check if already downloaded
-        if check_already_downloaded(title, date_str):
-            logger.info(f"⏭️  Already downloaded, skipping...")
+        if check_already_downloaded(title, date_str, filename_base):
+            logger.info("⏭️  Already downloaded, skipping...")
             skipped += 1
             logger.info("")
             continue
-        
+
         try:
             # Download the debate
             get_debate_audio(
                 page_url=url,
                 download_audio_only=download_audio_only,
                 audio_format=audio_format,
-                title=title
+                title=title,
+                filename_base=filename_base,
             )
             successful += 1
             logger.info(f"✅ Successfully downloaded: {title}")

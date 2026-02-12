@@ -88,7 +88,7 @@ python transcribe_audio.py audio_file.mp3 --no-overlap-detection
 python transcribe_audio.py audio_file.mp3 --condition-on-previous-text false --compression-ratio-threshold 2.0
 ```
 
-The output will be saved to `audio_file.txt` with speaker annotations in the format:
+The output will be saved to `audio_file_model.txt` (e.g. `debate_base.txt` when using the base model) with speaker annotations in the format:
 ```
 [SPEAKER_00]:
 Text spoken by speaker 00...

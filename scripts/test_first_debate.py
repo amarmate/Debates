@@ -12,8 +12,8 @@ from datetime import datetime
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from debate_downloader import get_debate_audio, sanitize_filename
-from download_all_debates import create_debate_title, DOWNLOAD_FOLDER
+from debate_downloader import get_debate_audio
+from download_all_debates import create_debate_title, create_debate_filename, DOWNLOAD_FOLDER
 from transcribe_audio import transcribe_audio
 
 CSV_FILE = Path("data/links/debates_unified.csv")
@@ -44,6 +44,7 @@ def main() -> int:
     print()
 
     # Download
+    filename_base = create_debate_filename(row)
     print("Step 1: Downloading...")
     try:
         get_debate_audio(
@@ -51,18 +52,18 @@ def main() -> int:
             download_audio_only=True,
             audio_format="mp3",
             title=title,
+            filename_base=filename_base,
         )
     except Exception as e:
         print(f"Download failed: {e}")
         return 1
 
-    # Find the downloaded file: prefer one matching our title, else most recent
+    # Find the downloaded file: prefer one matching our filename_base, else most recent
     if not DOWNLOAD_FOLDER.exists():
         print("Error: Download folder not found")
         return 1
 
-    sanitized_title = sanitize_filename(title)
-    matches = list(DOWNLOAD_FOLDER.glob(f"*{sanitized_title}*.mp3"))
+    matches = list(DOWNLOAD_FOLDER.glob(f"{filename_base}.mp3"))
     if not matches:
         matches = sorted(DOWNLOAD_FOLDER.glob("*.mp3"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not matches:
@@ -90,7 +91,8 @@ def main() -> int:
         print(f"Transcription failed: {e}")
         return 1
 
-    txt_path = audio_path.with_suffix(".txt")
+    model_size = "base"
+    txt_path = audio_path.parent / f"{audio_path.stem}_{model_size}.txt"
     print()
     print("=" * 60)
     print("Done!")
