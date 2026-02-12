@@ -11,12 +11,35 @@ os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 import logging
 import torch
 
-# PyTorch 2.6+ defaults weights_only=True; pyannote/speechbrain checkpoints use OmegaConf and typing
+# ---------------------------------------------------------------------------
+# PyTorch 2.6+ defaults weights_only=True in torch.load().  pyannote.audio,
+# speechbrain, and whisperx checkpoints contain OmegaConf objects, Python
+# built-in types and other globals that must be explicitly allowlisted.
+# We register them once at import time so every torch.load() in the process
+# (including deep inside library code) is covered.
+# ---------------------------------------------------------------------------
+import collections
+
+_safe_builtins = [list, dict, tuple, set, frozenset, collections.OrderedDict]
+torch.serialization.add_safe_globals(_safe_builtins)
+
 try:
-    from omegaconf import ListConfig, DictConfig
+    import numpy as np
+    torch.serialization.add_safe_globals([np.core.multiarray.scalar, np.dtype, np.ndarray])
+except (ImportError, AttributeError):
+    pass
+
+try:
+    from omegaconf import ListConfig, DictConfig, OmegaConf
     from omegaconf.base import ContainerMetadata
     import typing
-    torch.serialization.add_safe_globals([ListConfig, DictConfig, ContainerMetadata, typing.Any, typing.List, typing.Dict, typing.Union, typing.Optional, typing.Tuple])
+    _omegaconf_globals = [ListConfig, DictConfig, ContainerMetadata]
+    try:
+        _omegaconf_globals.append(OmegaConf)
+    except Exception:
+        pass
+    _typing_globals = [typing.Any, typing.List, typing.Dict, typing.Union, typing.Optional, typing.Tuple]
+    torch.serialization.add_safe_globals(_omegaconf_globals + _typing_globals)
 except ImportError:
     pass
 
