@@ -12,54 +12,21 @@ import logging
 import torch
 
 # ---------------------------------------------------------------------------
-# PyTorch 2.6+ changes and safe serialization
-# ---------------------------------------------------------------------------
-# 1) torch.load() now defaults to weights_only=True, which breaks older
-#    checkpoints (pyannote, speechbrain, whisperx) that store Python objects
-#    like OmegaConf's ListConfig/DictConfig.  We restore the pre‑2.6
-#    behaviour by defaulting weights_only to False when the caller does
-#    not specify it.
-# 2) Some libraries explicitly call torch.load(..., weights_only=True).
-#    For those, we allowlist the OmegaConf container types so that the
-#    new WeightsUnpickler accepts them.
-# All models in this pipeline are loaded from trusted sources (HF Hub),
-# so this relaxed behaviour is acceptable here.
+# PyTorch 2.6+ changed torch.load() to default weights_only=True.
+# pyannote, speechbrain, and WhisperX checkpoints contain OmegaConf and
+# other Python objects that trigger WeightsUnpickler errors. We force
+# weights_only=False for ALL torch.load calls so these trusted models
+# (from HuggingFace Hub) load correctly.
 # ---------------------------------------------------------------------------
 import functools as _functools
 _orig_torch_load = torch.load
 
 @_functools.wraps(_orig_torch_load)
 def _patched_load(*args, **kwargs):
-    if "weights_only" not in kwargs:
-        kwargs["weights_only"] = False
+    kwargs["weights_only"] = False  # Always use pre-2.6 behaviour for this pipeline
     return _orig_torch_load(*args, **kwargs)
 
 torch.load = _patched_load
-
-# Allowlist all OmegaConf classes for safe serialization, so calls that
-# *do* pass weights_only=True (inside pyannote/whisperx/speechbrain) can
-# still succeed without raising WeightsUnpickler errors about ListConfig,
-# DictConfig, ContainerMetadata, etc.
-try:
-    import inspect as _inspect
-    import omegaconf as _omegaconf
-    import torch.serialization as _ts
-
-    if hasattr(_ts, "add_safe_globals"):
-        _safe_omega_types = []
-        for _mod_name in ("listconfig", "dictconfig", "base", "nodes"):
-            _mod = getattr(_omegaconf, _mod_name, None)
-            if _mod is None:
-                continue
-            for _name, _obj in vars(_mod).items():
-                if _inspect.isclass(_obj):
-                    _safe_omega_types.append(_obj)
-        if _safe_omega_types:
-            _ts.add_safe_globals(_safe_omega_types)
-except Exception:
-    # Best‑effort: if this fails (older PyTorch or missing OmegaConf),
-    # we silently continue with the patched torch.load above.
-    pass
 
 import gc
 import whisper

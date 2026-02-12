@@ -36,6 +36,12 @@ def main() -> int:
         default="base",
         help="ASR model: Whisper size (tiny, base, small, medium, large) or HF path (e.g. inesc-id/WhisperLv3-EP-X)",
     )
+    parser.add_argument(
+        "--max-seconds",
+        type=int,
+        default=None,
+        help="Only transcribe the first N seconds (for quick testing, e.g. --max-seconds 60)",
+    )
     args = parser.parse_args()
     model_size = args.model
     if not CSV_FILE.exists():
@@ -93,6 +99,22 @@ def main() -> int:
 
     audio_path = matches[0]
     logger.info("Downloaded: %s", audio_path)
+
+    # Optionally trim to first N seconds for quick testing
+    if args.max_seconds is not None:
+        try:
+            from pydub import AudioSegment
+
+            clip_path = DOWNLOAD_FOLDER / f"{filename_base}_clip_{args.max_seconds}s.mp3"
+            if not clip_path.exists():
+                logger.info("Trimming to first %d seconds...", args.max_seconds)
+                audio = AudioSegment.from_file(str(audio_path))
+                clip = audio[: args.max_seconds * 1000]
+                clip.export(str(clip_path), format="mp3")
+            audio_path = clip_path
+            logger.info("Using clip: %s", audio_path)
+        except Exception as e:
+            logger.warning("Could not trim audio: %s. Using full file.", e)
 
     # Transcribe
     logger.info("Step 2: Transcribing...")
