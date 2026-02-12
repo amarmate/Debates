@@ -94,9 +94,15 @@ Text spoken by speaker 01...
 
 | Script | Purpose |
 |--------|---------|
+| `scripts/test_first_debate.py` | Download + transcribe first debate (end-to-end test) |
 | `scripts/benchmark_transcription.py` | Compare transcription to reference, compute WER/CER |
 | `scripts/cut_audio.py` | Cut MP3 by start/end or duration |
 | `scripts/migrate_links_to_unified.py` | Regenerate `data/links/debates_unified.csv` from per-election CSVs |
+
+**Test first debate** (download + transcribe):
+```powershell
+uv run python scripts/test_first_debate.py
+```
 
 **Benchmark** (add refs to `data/benchmark/refs/`):
 ```powershell
