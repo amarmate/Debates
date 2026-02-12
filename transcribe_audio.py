@@ -12,12 +12,18 @@ import logging
 import torch
 
 # ---------------------------------------------------------------------------
-# PyTorch 2.6 changed torch.load() to default weights_only=True.
-# pyannote, speechbrain, and whisperx checkpoints contain OmegaConf objects,
-# Python built-in types, and other globals blocked by the new default.
-# Instead of adding every type one by one, we patch torch.load so that
-# weights_only defaults to False (pre-2.6 behaviour).  All models loaded
-# here come from trusted sources (HuggingFace Hub), so this is safe.
+# PyTorch 2.6+ changes and safe serialization
+# ---------------------------------------------------------------------------
+# 1) torch.load() now defaults to weights_only=True, which breaks older
+#    checkpoints (pyannote, speechbrain, whisperx) that store Python objects
+#    like OmegaConf's ListConfig/DictConfig.  We restore the pre‑2.6
+#    behaviour by defaulting weights_only to False when the caller does
+#    not specify it.
+# 2) Some libraries explicitly call torch.load(..., weights_only=True).
+#    For those, we allowlist the OmegaConf container types so that the
+#    new WeightsUnpickler accepts them.
+# All models in this pipeline are loaded from trusted sources (HF Hub),
+# so this relaxed behaviour is acceptable here.
 # ---------------------------------------------------------------------------
 import functools as _functools
 _orig_torch_load = torch.load
@@ -29,6 +35,25 @@ def _patched_load(*args, **kwargs):
     return _orig_torch_load(*args, **kwargs)
 
 torch.load = _patched_load
+
+# Allowlist OmegaConf container types for safe serialization, so calls that
+# *do* pass weights_only=True (inside pyannote/whisperx/speechbrain) can
+# still succeed without raising WeightsUnpickler errors.
+try:
+    import omegaconf as _omegaconf
+    import torch.serialization as _ts
+
+    if hasattr(_ts, "add_safe_globals"):
+        _ts.add_safe_globals(
+            [
+                _omegaconf.listconfig.ListConfig,
+                _omegaconf.dictconfig.DictConfig,
+            ]
+        )
+except Exception:
+    # Best‑effort: if this fails (older PyTorch or missing OmegaConf),
+    # we silently continue with the patched torch.load above.
+    pass
 
 import gc
 import whisper
