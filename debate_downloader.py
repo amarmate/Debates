@@ -5,6 +5,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 import yt_dlp
+from tqdm import tqdm
 
 logging.basicConfig(
     level=logging.INFO,
@@ -529,10 +530,10 @@ def get_debate_audio(page_url=None, download_audio_only=None, audio_format=None,
             sanitized_title = "debate"
         
         # Format temp filename (download to temp first) - use absolute paths
+        # Use %(ext)s for temp so FFmpegExtractAudio produces name.mp3, not name.mp3.mp3
         if download_audio_only:
-            temp_file_path = temp_dir / f"{formatted_date}_{sanitized_title}.{audio_format}"
+            temp_file_path = temp_dir / f"{formatted_date}_{sanitized_title}.%(ext)s"
             final_file_path = download_dir / f"{formatted_date}_{sanitized_title}.{audio_format}"
-            # Use absolute path for yt-dlp output template
             temp_filename = str(temp_file_path.absolute())
             final_filename = str(final_file_path.absolute())
         else:
@@ -545,27 +546,42 @@ def get_debate_audio(page_url=None, download_audio_only=None, audio_format=None,
             logger.info(f"💾 Final filename: {final_filename}")
         logger.info("")
         
-        # Use yt-dlp Python API with progress_hooks for reliable progress display
+        # Use yt-dlp Python API with tqdm for compact in-place progress
+        pbar = None
+
         def progress_hook(d):
+            nonlocal pbar
             status = d.get("status")
             if status == "downloading":
-                # These keys are set by yt-dlp's internal report_progress (runs first)
-                percent = d.get("_percent_str", "N/A")
-                speed = d.get("_speed_str", "")
-                eta = d.get("_eta_str", "")
-                total = d.get("_total_bytes_str") or d.get("_total_bytes_estimate_str", "?")
-                frag = ""
-                if "fragment_index" in d and "fragment_count" in d:
-                    frag = f" (frag {d['fragment_index']}/{d['fragment_count']})"
-                logger.info(f"📥 [download] {percent} of {total} at {speed} ETA {eta}{frag}")
-            elif status == "finished":
-                logger.info(f"📥 [download] Download completed: {Path(d.get('filename', '')).name}")
-        
+                frag_idx = d.get("fragment_index")
+                frag_count = d.get("fragment_count")
+                percent_str = d.get("_percent_str", "").strip()
+                speed = d.get("_speed_str", "").strip()
+                eta = d.get("_eta_str", "").strip()
+                if pbar is None:
+                    total = frag_count if frag_count else 100
+                    pbar = tqdm(total=total, unit="frag" if frag_count else "it", desc="Download", ncols=80, bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} {postfix}")
+                if frag_count:
+                    pbar.n = min(frag_idx, pbar.total) if frag_idx is not None else pbar.n
+                else:
+                    try:
+                        pct = float(percent_str.replace("%", ""))
+                        pbar.n = min(int(pct), 99)
+                    except (ValueError, TypeError):
+                        pbar.n = pbar.n + 1 if pbar.n < pbar.total else pbar.n
+                pbar.set_postfix_str(f"{speed} ETA {eta}" if speed or eta else "")
+                pbar.refresh()
+            elif status == "finished" and pbar:
+                pbar.close()
+                pbar = None
+                logger.info(f"📥 Download completed: {Path(d.get('filename', '')).name}")
+
         ydl_opts = {
             "outtmpl": temp_filename,
             "format": "worst" if download_audio_only else "best",
             "quiet": True,
             "no_warnings": True,
+            "noprogress": True,  # suppress yt-dlp's built-in progress (we use tqdm)
             "progress_hooks": [progress_hook],
         }
         if download_audio_only:
@@ -593,7 +609,8 @@ def get_debate_audio(page_url=None, download_audio_only=None, audio_format=None,
                 if final_filename is None:
                     logger.error("❌ Final filename not set for audio download")
                     return
-                temp_file = Path(temp_filename)
+                # FFmpegExtractAudio outputs to name.mp3 (outtmpl uses %(ext)s)
+                temp_file = temp_dir / f"{formatted_date}_{sanitized_title}.{audio_format}"
                 if temp_file.exists():
                     final_file = Path(final_filename)
                     # Ensure final directory exists
@@ -601,13 +618,13 @@ def get_debate_audio(page_url=None, download_audio_only=None, audio_format=None,
                     temp_file.rename(final_file)
                     logger.info(f"✅ File moved to: {final_file}")
                 else:
-                    logger.warning(f"⚠️  Temp file not found: {temp_filename}")
+                    logger.warning(f"⚠️  Temp file not found: {temp_file}")
                     # Try to find any file that was created
                     matching_files = list(temp_dir.glob(f"{formatted_date}_{sanitized_title}.*"))
                     if matching_files:
                         logger.info(f"   Found alternative file: {matching_files[0]}")
                         temp_file = matching_files[0]
-                        final_file = download_dir / temp_file.name
+                        final_file = Path(final_filename)  # Always use intended name (avoids .mp3.mp3)
                         final_file.parent.mkdir(parents=True, exist_ok=True)
                         temp_file.rename(final_file)
                         logger.info(f"✅ File moved to: {final_file}")

@@ -11,6 +11,13 @@ uv pip install -e .
 playwright install chromium
 ```
 
+On Linux or Docker, install Chromium system dependencies first (fixes `libnspr4.so` etc.):
+
+```bash
+playwright install-deps chromium
+playwright install chromium
+```
+
 ## Usage
 
 **Download and transcribe all debates** (from `data/links/debates_unified.csv`):

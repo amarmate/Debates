@@ -476,7 +476,7 @@ def build_initial_prompt(metadata: Optional[Dict[str, str]] = None) -> str:
     if channel:
         parts.append(f"transmitido pela {channel}")
     
-    return ". ".join(parts) + "."
+    return ", ".join(parts) + "."
 
 
 def match_speakers_to_segments(transcription_segments: List[Dict], 
