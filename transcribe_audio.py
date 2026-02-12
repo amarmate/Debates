@@ -12,36 +12,23 @@ import logging
 import torch
 
 # ---------------------------------------------------------------------------
-# PyTorch 2.6+ defaults weights_only=True in torch.load().  pyannote.audio,
-# speechbrain, and whisperx checkpoints contain OmegaConf objects, Python
-# built-in types and other globals that must be explicitly allowlisted.
-# We register them once at import time so every torch.load() in the process
-# (including deep inside library code) is covered.
+# PyTorch 2.6 changed torch.load() to default weights_only=True.
+# pyannote, speechbrain, and whisperx checkpoints contain OmegaConf objects,
+# Python built-in types, and other globals blocked by the new default.
+# Instead of adding every type one by one, we patch torch.load so that
+# weights_only defaults to False (pre-2.6 behaviour).  All models loaded
+# here come from trusted sources (HuggingFace Hub), so this is safe.
 # ---------------------------------------------------------------------------
-import collections
+import functools as _functools
+_orig_torch_load = torch.load
 
-_safe_builtins = [list, dict, tuple, set, frozenset, collections.OrderedDict, collections.defaultdict]
-torch.serialization.add_safe_globals(_safe_builtins)
+@_functools.wraps(_orig_torch_load)
+def _patched_load(*args, **kwargs):
+    if "weights_only" not in kwargs:
+        kwargs["weights_only"] = False
+    return _orig_torch_load(*args, **kwargs)
 
-try:
-    import numpy as np
-    torch.serialization.add_safe_globals([np.core.multiarray.scalar, np.dtype, np.ndarray])
-except (ImportError, AttributeError):
-    pass
-
-try:
-    from omegaconf import ListConfig, DictConfig, OmegaConf
-    from omegaconf.base import ContainerMetadata
-    import typing
-    _omegaconf_globals = [ListConfig, DictConfig, ContainerMetadata]
-    try:
-        _omegaconf_globals.append(OmegaConf)
-    except Exception:
-        pass
-    _typing_globals = [typing.Any, typing.List, typing.Dict, typing.Union, typing.Optional, typing.Tuple]
-    torch.serialization.add_safe_globals(_omegaconf_globals + _typing_globals)
-except ImportError:
-    pass
+torch.load = _patched_load
 
 import gc
 import whisper
