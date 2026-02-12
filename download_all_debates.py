@@ -11,7 +11,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-CSV_FILE = "data/links/legislativas_debates_2025.csv"
+CSV_FILE = "data/links/debates_unified.csv"
 DOWNLOAD_FOLDER = Path("data/debates")
 SKIP_EXISTING = True  # Skip debates that already exist
 
@@ -38,16 +38,16 @@ def create_debate_title(row):
             if date_str:
                 parts.append(date_str)
     
-    # Add candidates
-    candidate1 = str(row.get('candidate1', '')).strip()
-    candidate2 = str(row.get('candidate2', '')).strip()
-    
-    if candidate1 and candidate2:
-        parts.append(f"{candidate1} vs {candidate2}")
-    elif candidate1:
-        parts.append(candidate1)
-    elif candidate2:
-        parts.append(candidate2)
+    # Add candidates (unified schema: use party1/party2 for legislativas, candidate1/candidate2 for presidenciais)
+    name1 = str(row.get('candidate1', '')).strip() or str(row.get('party1', '')).strip()
+    name2 = str(row.get('candidate2', '')).strip() or str(row.get('party2', '')).strip()
+
+    if name1 and name2:
+        parts.append(f"{name1} vs {name2}")
+    elif name1:
+        parts.append(name1)
+    elif name2:
+        parts.append(name2)
     
     # Add channel if available
     channel = str(row.get('channel', '')).strip()

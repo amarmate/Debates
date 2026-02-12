@@ -170,6 +170,16 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+# Test / sample outputs (transcription, etc.)
+test_*.txt
+testaudio.txt
+
+# Pipeline outputs
+error_log.txt
+data/temp/*.mp3
+data/temp/*.m4a
+data/temp/*.wav
+
 # PyPI configuration file
 .pypirc
 

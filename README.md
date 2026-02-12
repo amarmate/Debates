@@ -1,51 +1,27 @@
-# Debates Audio Extractor
+# Debates
 
-Script to extract audio from CNN Portugal debate videos.
+Extract, transcribe, and benchmark political debate audio from CNN Portugal videos.
 
 ## Setup with uv
 
-1. **Create virtual environment:**
-   ```powershell
-   uv venv
-   ```
-
-2. **Activate the virtual environment:**
-   ```powershell
-   .venv\Scripts\activate
-   ```
-
-3. **Install Python dependencies:**
-   ```powershell
-   uv pip install playwright
-   ```
-
-4. **Install Playwright browsers:**
-   ```powershell
-   playwright install chromium
-   ```
-
-5. **Install yt-dlp (required for downloading):**
-   
-   You can install `yt-dlp` either:
-   
-   - **Via pip (recommended):**
-     ```powershell
-     uv pip install yt-dlp
-     ```
-   
-   - **Or via standalone installer:**
-     Download from https://github.com/yt-dlp/yt-dlp/releases or use:
-     ```powershell
-     pip install yt-dlp
-     ```
+```powershell
+uv venv
+.venv\Scripts\activate
+uv pip install -e .
+playwright install chromium
+```
 
 ## Usage
 
+**Download and transcribe all debates** (from `data/links/debates_unified.csv`):
 ```powershell
-python sacar_debates.py
+uv run python process_debates.py
 ```
 
-Make sure the virtual environment is activated before running the script.
+**Download only:**
+```powershell
+uv run python download_all_debates.py
+```
 
 ## Audio Transcription with Speaker Diarization
 
@@ -95,6 +71,16 @@ python transcribe_audio.py audio_file.mp3 base 2
 python transcribe_audio.py audio_file.mp3 base --no-diarization
 ```
 
+**Disable overlap detection** (faster; segments where two speakers talk at once won't be flagged):
+```powershell
+python transcribe_audio.py audio_file.mp3 --no-overlap-detection
+```
+
+**Whisper anti-repetition options** (reduce repetitive hallucinations):
+```powershell
+python transcribe_audio.py audio_file.mp3 --condition-on-previous-text false --compression-ratio-threshold 2.0
+```
+
 The output will be saved to `audio_file.txt` with speaker annotations in the format:
 ```
 [SPEAKER_00]:
@@ -104,13 +90,32 @@ Text spoken by speaker 00...
 Text spoken by speaker 01...
 ```
 
+## Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/benchmark_transcription.py` | Compare transcription to reference, compute WER/CER |
+| `scripts/cut_audio.py` | Cut MP3 by start/end or duration |
+| `scripts/migrate_links_to_unified.py` | Regenerate `data/links/debates_unified.csv` from per-election CSVs |
+
+**Benchmark** (add refs to `data/benchmark/refs/`):
+```powershell
+uv run python scripts/benchmark_transcription.py
+```
+
+**Regenerate unified links:**
+```powershell
+uv run python scripts/migrate_links_to_unified.py
+```
+
 ## Dependencies
 
 - `playwright` - For browser automation to intercept network requests
 - `yt-dlp` - For downloading and converting video streams to audio
 - `openai-whisper` - For audio transcription
-- `pyannote.audio` - For speaker diarization
+- `pyannote.audio` - For speaker diarization and overlapped speech detection
 - `librosa` - For audio processing
 - `tqdm` - For progress bars
+- `jiwer` - For WER/CER benchmarking
 
 

@@ -4,9 +4,15 @@ Script to transcribe audio files using OpenAI Whisper with automatic speaker dia
 Supports Portuguese language transcription with progress tracking and speaker identification.
 """
 
+import os
+# Set PyTorch memory allocation configuration to avoid fragmentation
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+
+import torch
+import gc
 import whisper
 import sys
-import os
+import csv
 from pathlib import Path
 from tqdm import tqdm
 import librosa
@@ -15,6 +21,7 @@ import threading
 import time
 import warnings
 from typing import List, Dict, Tuple, Optional
+from datetime import datetime
 
 # Suppress torchcodec warnings - pyannote.audio will fall back to librosa
 warnings.filterwarnings("ignore", message=".*torchcodec.*")
@@ -115,6 +122,12 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
                 "pyannote/speaker-diarization-3.1",
                 use_auth_token=True
             )
+        
+        # Move pipeline to GPU if available for faster processing
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        pipeline.to(device)
+        print(f"Pipeline loaded on device: {device}")
+        
     except Exception as e:
         print(f"Error loading diarization model: {e}")
         print("\nMake sure you have:")
@@ -129,33 +142,90 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
         # Load audio manually to avoid torchcodec/AudioDecoder issues on Windows
         # pyannote.audio 3.1+ can accept memory inputs
         try:
-            import torch
-            import librosa
-            import numpy as np
+            # OPTIMIZATION: Resample to 16kHz for faster processing
+            # pyannote works well with 16kHz, and this reduces data by 3x for 48kHz audio
+            target_sr = 16000
+            print(f"Loading audio and resampling to {target_sr}Hz for faster processing...")
             
-            # Load with librosa (which uses soundfile/ffmpeg CLI and is more robust on Windows)
-            # Load as mono to ensure consistent shape (1, time)
-            waveform, sample_rate = librosa.load(audio_path, sr=None, mono=True)
+            # Load with librosa and resample to 16kHz (much faster than 48kHz)
+            waveform, original_sr = librosa.load(audio_path, sr=None, mono=True)
+            
+            # Resample if needed
+            if original_sr != target_sr:
+                waveform = librosa.resample(waveform, orig_sr=original_sr, target_sr=target_sr)
+                sample_rate = target_sr
+                print(f"Resampled from {original_sr}Hz to {target_sr}Hz (reduced by {original_sr/target_sr:.1f}x)")
+            else:
+                sample_rate = original_sr
             
             # Reshape to (channels, time) -> (1, time) for mono
             if waveform.ndim == 1:
                 waveform = waveform[np.newaxis, :]
             
-            # Convert to torch tensor
-            waveform_tensor = torch.from_numpy(waveform)
+            # Convert to torch tensor and move to same device as pipeline
+            # Try to detect device from pipeline, fallback to CUDA if available
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            # Check if pipeline has a device attribute or try to infer from its components
+            try:
+                if hasattr(pipeline, 'segmentation') and hasattr(pipeline.segmentation, 'device'):
+                    device = pipeline.segmentation.device
+                elif hasattr(pipeline, 'embedding') and hasattr(pipeline.embedding, 'device'):
+                    device = pipeline.embedding.device
+            except (AttributeError, RuntimeError):
+                pass  # Use default device
+            
+            waveform_tensor = torch.from_numpy(waveform).to(device)
             
             audio_input = {"waveform": waveform_tensor, "sample_rate": sample_rate}
-            print(f"Loaded audio into memory: shape={waveform_tensor.shape}, sr={sample_rate}")
+            duration = waveform_tensor.shape[1] / sample_rate
+            print(f"Loaded audio into memory: shape={waveform_tensor.shape}, sr={sample_rate}, duration={duration:.1f}s")
             
         except Exception as e:
             print(f"Warning: Failed to load audio into memory: {e}")
             print("Falling back to file path input (may fail if torchcodec is missing)...")
             audio_input = {"audio": audio_path}
 
+        # OPTIMIZATION: Use min_duration_off to skip very short silence segments (speeds up processing)
+        # This parameter filters out silence segments shorter than 0.5 seconds
+        diarization_params = {
+            "min_duration_off": 0.5  # Ignore silence segments shorter than 0.5s
+        }
+        
         if num_speakers:
-            diarization = pipeline(audio_input, num_speakers=num_speakers)
-        else:
-            diarization = pipeline(audio_input)
+            diarization_params["num_speakers"] = num_speakers
+        
+        # Show progress indicator for long-running diarization
+        print("Processing diarization (this may take a while for long audio files)...")
+        start_time = time.time()
+        
+        # Run diarization in a thread with progress updates
+        diarization_result = [None]
+        diarization_error = [None]
+        
+        def run_diarization():
+            try:
+                diarization_result[0] = pipeline(audio_input, **diarization_params)
+            except Exception as e:
+                diarization_error[0] = e
+        
+        diarization_thread = threading.Thread(target=run_diarization)
+        diarization_thread.start()
+        
+        # Show progress while diarization runs
+        while diarization_thread.is_alive():
+            elapsed = time.time() - start_time
+            print(f"\r  Elapsed: {elapsed:.1f}s...", end="", flush=True)
+            time.sleep(1)
+        
+        diarization_thread.join()
+        print()  # New line after progress
+        
+        if diarization_error[0]:
+            raise diarization_error[0]
+        
+        diarization = diarization_result[0]
+        elapsed_time = time.time() - start_time
+        print(f"Diarization completed in {elapsed_time:.1f}s")
         
         # Extract speaker segments
         # Handle different API versions of pyannote.audio
@@ -188,6 +258,18 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
                 raise ValueError(f"Unknown diarization output format: {type(diarization)}. Attributes: {[attr for attr in dir(diarization) if not attr.startswith('_')]}")
         
         print(f"Found {len(set(seg[2] for seg in speaker_segments))} speaker(s)")
+        
+        # Clean up pipeline and tensors to free VRAM immediately
+        if 'pipeline' in locals():
+            del pipeline
+        if 'waveform_tensor' in locals():
+            del waveform_tensor
+        if 'diarization' in locals():
+            del diarization
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
         return speaker_segments
         
     except Exception as e:
@@ -195,6 +277,206 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
         import traceback
         traceback.print_exc()
         return None
+
+
+def perform_vad(audio_path: str, threshold: float = 0.5):
+    """
+    Perform Voice Activity Detection (VAD) to identify speech segments.
+    Uses Silero VAD model to detect speech and filter out silence/noise.
+    
+    Args:
+        audio_path: Path to the audio file
+        threshold: VAD threshold (0.0-1.0), higher = more conservative (default: 0.5)
+    
+    Returns:
+        List of tuples: [(start_time, end_time), ...] for speech segments
+    """
+    print("\nPerforming Voice Activity Detection (VAD)...")
+    try:
+        # Load Silero VAD model from PyTorch Hub
+        model, utils = torch.hub.load(
+            repo_or_dir='snakers4/silero-vad',
+            model='silero_vad',
+            force_reload=False,
+            onnx=False
+        )
+        
+        # Unpack utilities
+        (get_speech_timestamps, _, read_audio, *_) = utils
+        
+        # Load audio using Silero's read_audio function (resamples to 16kHz)
+        sampling_rate = 16000
+        wav = read_audio(audio_path, sampling_rate=sampling_rate)
+        
+        # Get speech timestamps
+        speech_timestamps = get_speech_timestamps(
+            wav, 
+            model, 
+            threshold=threshold,
+            sampling_rate=sampling_rate
+        )
+        
+        # Convert timestamps to list of (start, end) tuples in seconds
+        speech_segments = []
+        for ts in speech_timestamps:
+            start = ts['start'] / sampling_rate
+            end = ts['end'] / sampling_rate
+            speech_segments.append((start, end))
+        
+        total_speech_duration = sum(end - start for start, end in speech_segments)
+        total_duration = len(wav) / sampling_rate
+        speech_percentage = (total_speech_duration / total_duration * 100) if total_duration > 0 else 0
+        
+        print(f"VAD detected {len(speech_segments)} speech segments")
+        print(f"Speech duration: {total_speech_duration:.1f}s / {total_duration:.1f}s ({speech_percentage:.1f}%)")
+        
+        # Clean up
+        del model, wav
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        return speech_segments
+        
+    except Exception as e:
+        print(f"Warning: VAD failed: {e}")
+        print("Continuing without VAD filtering...")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def lookup_debate_metadata(audio_path: str) -> Optional[Dict[str, str]]:
+    """
+    Look up debate metadata from the unified CSV based on audio filename.
+
+    Args:
+        audio_path: Path to the audio file
+
+    Returns:
+        Dictionary with metadata (candidate1, candidate2, date, channel) or None
+    """
+    import unicodedata
+
+    audio_file = Path(audio_path)
+    filename = audio_file.stem.lower()
+
+    csv_file = Path("data/links/debates_unified.csv")
+    if not csv_file.exists():
+        return None
+
+    def normalize_name(name: str) -> str:
+        name = unicodedata.normalize("NFD", name.lower())
+        name = "".join(c for c in name if unicodedata.category(c) != "Mn")
+        return name.replace(" ", "").replace("-", "")
+
+    try:
+        with open(csv_file, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            matches: list[tuple[int, dict[str, str]]] = []
+
+            for row in reader:
+                date_str = (row.get("date") or "").strip()
+                party1 = (row.get("party1") or "").strip()
+                party2 = (row.get("party2") or "").strip()
+                candidate1 = (row.get("candidate1") or "").strip()
+                candidate2 = (row.get("candidate2") or "").strip()
+                channel = (row.get("channel") or "").strip()
+
+                # Display names: candidate if present, else party
+                name1 = candidate1 or party1
+                name2 = candidate2 or party2
+
+                if not date_str or len(date_str) < 10:
+                    continue
+                try:
+                    date_obj = datetime.strptime(date_str[:10], "%Y-%m-%d")
+                    formatted_date = date_obj.strftime("%Y_%m_%d")
+                except ValueError:
+                    continue
+
+                if not filename.startswith(formatted_date.lower()):
+                    continue
+
+                metadata = {
+                    "candidate1": name1,
+                    "candidate2": name2,
+                    "date": date_str,
+                    "channel": channel,
+                }
+
+                name1_norm = normalize_name(name1) if name1 else ""
+                name2_norm = normalize_name(name2) if name2 else ""
+                filename_norm = normalize_name(filename)
+
+                match_score = 0
+                if name1_norm and name1_norm in filename_norm:
+                    match_score += 1
+                if name2_norm and name2_norm in filename_norm:
+                    match_score += 1
+
+                matches.append((match_score, metadata))
+
+            if matches:
+                matches.sort(key=lambda x: x[0], reverse=True)
+                return matches[0][1]
+    except Exception:
+        pass
+
+    return None
+
+
+def build_initial_prompt(metadata: Optional[Dict[str, str]] = None) -> str:
+    """
+    Build an initial prompt for Whisper transcription.
+    
+    Args:
+        metadata: Optional dictionary with debate metadata (candidate1, candidate2, date, channel)
+    
+    Returns:
+        Initial prompt string
+    """
+    base_prompt = "Transcrição de um debate político em Portugal"
+    
+    if not metadata:
+        return base_prompt
+    
+    # Build enriched prompt with metadata
+    parts = [base_prompt]
+    
+    # Add candidates
+    candidate1 = metadata.get('candidate1', '').strip()
+    candidate2 = metadata.get('candidate2', '').strip()
+    if candidate1 and candidate2:
+        parts.append(f"entre {candidate1} e {candidate2}")
+    elif candidate1:
+        parts.append(f"com {candidate1}")
+    elif candidate2:
+        parts.append(f"com {candidate2}")
+    
+    # Add date
+    date_str = metadata.get('date', '').strip()
+    if date_str:
+        try:
+            date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+            # Format date in Portuguese style: "dia X de mês de YYYY"
+            months_pt = [
+                'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+                'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'
+            ]
+            formatted_date = f"{date_obj.day} de {months_pt[date_obj.month - 1]} de {date_obj.year}"
+            parts.append(f"realizado em {formatted_date}")
+        except ValueError:
+            # If date parsing fails, use original date string
+            if date_str:
+                parts.append(f"realizado em {date_str}")
+    
+    # Add channel
+    channel = metadata.get('channel', '').strip()
+    if channel:
+        parts.append(f"transmitido pela {channel}")
+    
+    return ". ".join(parts) + "."
 
 
 def match_speakers_to_segments(transcription_segments: List[Dict], 
@@ -252,8 +534,82 @@ def match_speakers_to_segments(transcription_segments: List[Dict],
     return matched_segments
 
 
+def perform_overlap_detection(audio_path: str) -> List[Tuple[float, float]]:
+    """
+    Detect overlapped speech (two or more speakers talking at once) using pyannote.
+
+    Returns:
+        List of (start, end) tuples for overlapped regions in seconds.
+    """
+    try:
+        from pyannote.audio import Pipeline
+    except ImportError:
+        print("Warning: pyannote.audio not available for overlap detection.")
+        return []
+
+    print("\nLoading overlapped speech detection model...")
+    try:
+        try:
+            pipeline = Pipeline.from_pretrained(
+                "pyannote/overlapped-speech-detection",
+                token=True,
+            )
+        except TypeError:
+            pipeline = Pipeline.from_pretrained(
+                "pyannote/overlapped-speech-detection",
+                use_auth_token=True,
+            )
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        pipeline.to(device)
+    except Exception as e:
+        print(f"Warning: Could not load overlap model: {e}")
+        print("Visit https://huggingface.co/pyannote/overlapped-speech-detection to accept terms.")
+        return []
+
+    try:
+        target_sr = 16000
+        waveform, original_sr = librosa.load(audio_path, sr=None, mono=True)
+        if original_sr != target_sr:
+            waveform = librosa.resample(waveform, orig_sr=original_sr, target_sr=target_sr)
+        if waveform.ndim == 1:
+            waveform = waveform[np.newaxis, :]
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        waveform_tensor = torch.from_numpy(waveform).to(device)
+        audio_input = {"waveform": waveform_tensor, "sample_rate": target_sr}
+    except Exception:
+        audio_input = {"audio": audio_path}
+
+    try:
+        output = pipeline(audio_input)
+        segments = []
+        if hasattr(output, "get_timeline"):
+            for seg in output.get_timeline().support():
+                segments.append((float(seg.start), float(seg.end)))
+        elif hasattr(output, "itertracks"):
+            for segment, _, _ in output.itertracks(yield_label=True):
+                segments.append((float(segment.start), float(segment.end)))
+        print(f"Detected {len(segments)} overlapped speech region(s)")
+        del pipeline
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return segments
+    except Exception as e:
+        print(f"Warning: Overlap detection failed: {e}")
+        return []
+
+
+def _segments_overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> bool:
+    return max(a_start, b_start) < min(a_end, b_end)
+
+
 def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "base", 
-                     enable_diarization: bool = True, num_speakers: Optional[int] = None):
+                     enable_diarization: bool = True, num_speakers: Optional[int] = None,
+                     enable_vad: bool = True, initial_prompt: Optional[str] = None,
+                     condition_on_previous_text: bool = False,
+                     compression_ratio_threshold: float = 2.0,
+                     chunk_length_s: Optional[int] = None,
+                     enable_overlap_detection: bool = True):
     """
     Transcribe an audio file using Whisper with progress tracking and optional speaker diarization.
     
@@ -264,6 +620,8 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
                    Larger models are more accurate but slower
         enable_diarization: Whether to perform speaker diarization (default: True)
         num_speakers: Optional number of speakers for diarization. If None, auto-detected.
+        enable_vad: Whether to use Voice Activity Detection to filter non-speech segments (default: True)
+        initial_prompt: Optional initial prompt to guide transcription and reduce hallucinations
     """
     if not os.path.exists(audio_path):
         print(f"Error: Audio file not found: {audio_path}")
@@ -279,10 +637,26 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
         print(f"Warning: Could not get audio duration: {e}")
         duration = None
     
+    # Perform VAD if enabled
+    vad_segments = None
+    if enable_vad:
+        vad_segments = perform_vad(audio_path)
+        if vad_segments is None:
+            print("Continuing without VAD filtering...")
+    
     print(f"\nLoading Whisper model '{model_size}'...")
     model = whisper.load_model(model_size)
     
+    # Look up metadata from CSV files if prompt not provided
+    if initial_prompt is None:
+        metadata = lookup_debate_metadata(audio_path)
+        initial_prompt = build_initial_prompt(metadata)
+        if metadata:
+            print(f"Found metadata: {metadata.get('candidate1', '')} vs {metadata.get('candidate2', '')} ({metadata.get('date', '')})")
+    
     print(f"\nStarting transcription...")
+    if initial_prompt:
+        print(f"Using initial prompt: {initial_prompt[:100]}...")
     
     # Use progress context manager
     with TranscriptionProgress(duration, model_size) as progress:
@@ -296,12 +670,51 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
         update_thread.start()
         
         try:
-            # Transcribe with Portuguese language specified
+            # Transcribe with Portuguese language specified and initial prompt
             # verbose=False suppresses Whisper's built-in progress (we use our own)
-            result = model.transcribe(audio_path, language=language, verbose=False)
+            # initial_prompt helps guide the model and reduce hallucinations
+            # Anti-repetition: condition_on_previous_text=False, lower compression_ratio_threshold
+            transcribe_kwargs = dict(
+                language=language,
+                verbose=False,
+                initial_prompt=initial_prompt,
+                condition_on_previous_text=condition_on_previous_text,
+                compression_ratio_threshold=compression_ratio_threshold,
+            )
+            if chunk_length_s is not None:
+                transcribe_kwargs["chunk_length_s"] = chunk_length_s
+            result = model.transcribe(audio_path, **transcribe_kwargs)
         finally:
             progress.done = True
             time.sleep(0.6)  # Allow final update
+    
+    # Filter transcription segments using VAD if available
+    if vad_segments and result.get("segments"):
+        print("\nFiltering transcription segments using VAD...")
+        original_count = len(result["segments"])
+        filtered_segments = []
+        
+        for segment in result["segments"]:
+            seg_start = segment["start"]
+            seg_end = segment["end"]
+            seg_mid = (seg_start + seg_end) / 2
+            
+            # Check if segment overlaps with any VAD-detected speech segment
+            overlaps = False
+            for vad_start, vad_end in vad_segments:
+                if seg_mid >= vad_start and seg_mid <= vad_end:
+                    overlaps = True
+                    break
+            
+            if overlaps:
+                filtered_segments.append(segment)
+        
+        result["segments"] = filtered_segments
+        filtered_count = len(filtered_segments)
+        print(f"Filtered {original_count} segments to {filtered_count} speech segments")
+        
+        # Rebuild full text from filtered segments
+        result["text"] = " ".join(seg["text"].strip() for seg in filtered_segments)
     
     # Perform speaker diarization if enabled
     speaker_segments = None
@@ -326,6 +739,18 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
         # Diarization was enabled but failed - add UNKNOWN speaker labels
         for segment in segments:
             segment["speaker"] = "UNKNOWN"
+
+    # Overlap detection: flag segments where two speakers talk at once
+    overlap_regions: List[Tuple[float, float]] = []
+    if enable_overlap_detection:
+        overlap_regions = perform_overlap_detection(audio_path)
+    for segment in segments:
+        seg_overlap = False
+        for ov_start, ov_end in overlap_regions:
+            if _segments_overlap(segment["start"], segment["end"], ov_start, ov_end):
+                seg_overlap = True
+                break
+        segment["overlap"] = seg_overlap
     
     # Generate annotated text
     if segments and speaker_segments:
@@ -336,6 +761,8 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
         for segment in segments:
             speaker = segment.get("speaker", "UNKNOWN")
             text = segment["text"].strip()
+            if segment.get("overlap", False):
+                text += " [!]"
             
             if speaker != current_speaker:
                 if annotated_lines:  # Add blank line between speakers
@@ -346,6 +773,15 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
             annotated_lines.append(text)
         
         annotated_text = "\n".join(annotated_lines)
+    elif segments:
+        # No diarization: still include overlap markers
+        parts = []
+        for seg in segments:
+            t = seg["text"].strip()
+            if seg.get("overlap", False):
+                t += " [!]"
+            parts.append(t)
+        annotated_text = " ".join(parts)
     else:
         annotated_text = result["text"]
     
@@ -376,6 +812,16 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
             text = segment['text']
             print(f"[{start:.1f}s - {end:.1f}s] [{speaker}]: {text}")
 
+    # Clean up memory
+    print("\nCleaning up memory...")
+    if 'model' in locals():
+        del model
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return result["text"]
+
 
 if __name__ == "__main__":
     # Check if pyannote.audio is available (for better error messages)
@@ -404,6 +850,39 @@ if __name__ == "__main__":
     # Optional: disable diarization with --no-diarization flag
     enable_diarization = "--no-diarization" not in sys.argv
     
+    # Optional: disable VAD with --no-vad flag
+    enable_vad = "--no-vad" not in sys.argv
+
+    # Optional: disable overlap detection
+    enable_overlap_detection = "--no-overlap-detection" not in sys.argv
+
+    # Optional: Whisper anti-repetition (defaults reduce hallucinations)
+    condition_on_previous_text = False
+    compression_ratio_threshold = 2.0
+    chunk_length_s = None
+    if "--condition-on-previous-text" in sys.argv:
+        idx = sys.argv.index("--condition-on-previous-text")
+        if idx + 1 < len(sys.argv):
+            condition_on_previous_text = sys.argv[idx + 1].lower() in ("1", "true", "yes", "y", "on")
+    if "--compression-ratio-threshold" in sys.argv:
+        idx = sys.argv.index("--compression-ratio-threshold")
+        if idx + 1 < len(sys.argv):
+            compression_ratio_threshold = float(sys.argv[idx + 1])
+    if "--chunk-length-s" in sys.argv:
+        idx = sys.argv.index("--chunk-length-s")
+        if idx + 1 < len(sys.argv):
+            chunk_length_s = int(sys.argv[idx + 1])
+    
+    # Optional: custom initial prompt
+    initial_prompt = None
+    if "--prompt" in sys.argv:
+        try:
+            prompt_idx = sys.argv.index("--prompt")
+            if prompt_idx + 1 < len(sys.argv):
+                initial_prompt = sys.argv[prompt_idx + 1]
+        except (ValueError, IndexError):
+            print("Warning: --prompt flag provided but no prompt text found")
+    
     # Warn if diarization is enabled but pyannote is not available
     if enable_diarization and not pyannote_available:
         uv_lock_exists = Path("uv.lock").exists()
@@ -421,10 +900,25 @@ if __name__ == "__main__":
     print(f"Model: {model_size}")
     print(f"Language: Portuguese (pt)")
     print(f"Speaker diarization: {'Enabled' if enable_diarization else 'Disabled'}")
+    print(f"VAD (Voice Activity Detection): {'Enabled' if enable_vad else 'Disabled'}")
+    print(f"Overlap detection: {'Enabled' if enable_overlap_detection else 'Disabled'}")
+    if initial_prompt:
+        print(f"Initial prompt: {initial_prompt[:80]}...")
     if num_speakers:
         print(f"Number of speakers: {num_speakers}")
     print("=" * 80)
     print()
     
-    transcribe_audio(audio_file, language="pt", model_size=model_size, 
-                     enable_diarization=enable_diarization, num_speakers=num_speakers)
+    transcribe_audio(
+        audio_file,
+        language="pt",
+        model_size=model_size,
+        enable_diarization=enable_diarization,
+        num_speakers=num_speakers,
+        enable_vad=enable_vad,
+        initial_prompt=initial_prompt,
+        condition_on_previous_text=condition_on_previous_text,
+        compression_ratio_threshold=compression_ratio_threshold,
+        chunk_length_s=chunk_length_s,
+        enable_overlap_detection=enable_overlap_detection,
+    )

@@ -1,0 +1,10 @@
+---
+description: Agent must identify which model it is at the start of every response
+alwaysApply: true
+---
+
+# Agent Identity
+
+Always start your response by identifying which model you are.
+
+This helps the user know which AI assistant they are interacting with.

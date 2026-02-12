@@ -1,14 +1,10 @@
-import subprocess
-import sys
-import shutil
-import threading
-import queue
-import time
-from playwright.sync_api import sync_playwright
 import logging
 import re
 from datetime import datetime
 from pathlib import Path
+
+from playwright.sync_api import sync_playwright
+import yt_dlp
 
 logging.basicConfig(
     level=logging.INFO,
@@ -544,201 +540,53 @@ def get_debate_audio(page_url=None, download_audio_only=None, audio_format=None,
             temp_filename = str(temp_file_path.absolute())
             final_filename = None  # Will be determined after download based on actual file extension
         
-        # Use Python module approach (works reliably with uv and regular pip)
-        # Try direct yt-dlp command first, fallback to Python module
-        yt_dlp_path = shutil.which("yt-dlp")
-        if yt_dlp_path:
-            yt_dlp_cmd = [yt_dlp_path]
-        else:
-            # Use Python module approach (works with uv)
-            yt_dlp_cmd = [sys.executable, "-m", "yt_dlp"]
-        
-        if download_audio_only:
-            # For audio-only: extract audio from worst quality video stream (faster download)
-            command = yt_dlp_cmd + [
-                "-o", temp_filename,
-                "-f", "worst",  # Worst quality video = faster download, audio quality unaffected
-                "-x",
-                "--audio-format", audio_format,
-                "--audio-quality", "0"  # Best audio quality
-            ]
-        else:
-            command = yt_dlp_cmd + [
-                "-o", temp_filename,
-                "-f", "best"
-            ]
-        
-        command.append(m3u8_url)
-        
         logger.info(f"💾 Temp filename: {temp_filename}")
         if download_audio_only:
             logger.info(f"💾 Final filename: {final_filename}")
-        logger.info(f"Command: {' '.join(repr(arg) if ' ' in arg else arg for arg in command)}")
         logger.info("")
         
-        # Run download with real-time progress
-        # yt-dlp outputs progress to stderr, so we need to handle both streams
+        # Use yt-dlp Python API with progress_hooks for reliable progress display
+        def progress_hook(d):
+            status = d.get("status")
+            if status == "downloading":
+                # These keys are set by yt-dlp's internal report_progress (runs first)
+                percent = d.get("_percent_str", "N/A")
+                speed = d.get("_speed_str", "")
+                eta = d.get("_eta_str", "")
+                total = d.get("_total_bytes_str") or d.get("_total_bytes_estimate_str", "?")
+                frag = ""
+                if "fragment_index" in d and "fragment_count" in d:
+                    frag = f" (frag {d['fragment_index']}/{d['fragment_count']})"
+                logger.info(f"📥 [download] {percent} of {total} at {speed} ETA {eta}{frag}")
+            elif status == "finished":
+                logger.info(f"📥 [download] Download completed: {Path(d.get('filename', '')).name}")
         
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1
-        )
+        ydl_opts = {
+            "outtmpl": temp_filename,
+            "format": "worst" if download_audio_only else "best",
+            "quiet": True,
+            "no_warnings": True,
+            "progress_hooks": [progress_hook],
+        }
+        if download_audio_only:
+            ydl_opts["postprocessors"] = [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": audio_format,
+                "preferredquality": "0",
+            }]
         
-        # Queues to collect output from both streams
-        stdout_queue = queue.Queue()
-        stderr_queue = queue.Queue()
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([m3u8_url])
+            return_code = 0
+        except yt_dlp.utils.DownloadError as e:
+            logger.error(f"❌ Download failed: {e}")
+            return_code = 1
+        except Exception as e:
+            logger.error(f"❌ Download failed: {e}")
+            return_code = 1
         
-        def read_stdout():
-            """Read stdout and put in queue"""
-            try:
-                if process.stdout:
-                    for line in iter(process.stdout.readline, ''):
-                        if line:
-                            stdout_queue.put(line)
-            except Exception:
-                pass
-            finally:
-                stdout_queue.put(None)
-        
-        def read_stderr():
-            """Read stderr and put in queue"""
-            try:
-                if process.stderr:
-                    for line in iter(process.stderr.readline, ''):
-                        if line:
-                            stderr_queue.put(line)
-            except Exception:
-                pass
-            finally:
-                stderr_queue.put(None)
-        
-        # Start threads to read both streams
-        stdout_thread = threading.Thread(target=read_stdout, daemon=True)
-        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
-        stdout_thread.start()
-        stderr_thread.start()
-        
-        # Track progress
-        last_progress_line = ""
-        error_output = []
-        stdout_lines = []
-        
-        # Process output from both streams while process is running
-        while process.poll() is None:  # Process is still running
-            # Process stderr (progress output)
-            try:
-                while True:
-                    line = stderr_queue.get_nowait()
-                    if line is None:
-                        break
-                    line = line.strip()
-                    if line:
-                        # Handle carriage returns (yt-dlp overwrites lines)
-                        if '\r' in line:
-                            parts = line.split('\r')
-                            line = parts[-1].strip()
-                        
-                        # Display progress and important messages
-                        if '[download]' in line.lower():
-                            # Show progress updates
-                            if line != last_progress_line:
-                                logger.info(f"📥 {line}")
-                                last_progress_line = line
-                        elif 'error' in line.lower() or 'warning' in line.lower():
-                            logger.warning(f"⚠️  {line}")
-                            if 'error' in line.lower():
-                                error_output.append(line)
-                        elif line and not line.startswith('['):
-                            # Other important messages
-                            logger.info(f"   {line}")
-            except queue.Empty:
-                pass
-            
-            # Process stdout (general output)
-            try:
-                while True:
-                    line = stdout_queue.get_nowait()
-                    if line is None:
-                        break
-                    line = line.strip()
-                    if line:
-                        stdout_lines.append(line)
-                        if 'error' in line.lower():
-                            error_output.append(line)
-                            logger.error(f"❌ {line}")
-            except queue.Empty:
-                pass
-            
-            # Small sleep to avoid busy-waiting
-            time.sleep(0.1)
-        
-        # Process any remaining output after process completes
-        # Wait a bit for threads to finish reading remaining data
-        stdout_thread.join(timeout=2)
-        stderr_thread.join(timeout=2)
-        
-        # Process any remaining output
-        while not stdout_queue.empty() or not stderr_queue.empty():
-            # Process stderr (progress output)
-            try:
-                while True:
-                    line = stderr_queue.get_nowait()
-                    if line is None:
-                        break
-                    line = line.strip()
-                    if line:
-                        # Handle carriage returns (yt-dlp overwrites lines)
-                        if '\r' in line:
-                            parts = line.split('\r')
-                            line = parts[-1].strip()
-                        
-                        # Display progress and important messages
-                        if '[download]' in line.lower():
-                            # Show progress updates
-                            if line != last_progress_line:
-                                logger.info(f"📥 {line}")
-                                last_progress_line = line
-                        elif 'error' in line.lower() or 'warning' in line.lower():
-                            logger.warning(f"⚠️  {line}")
-                            if 'error' in line.lower():
-                                error_output.append(line)
-                        elif line and not line.startswith('['):
-                            # Other important messages
-                            logger.info(f"   {line}")
-            except queue.Empty:
-                pass
-            
-            # Process stdout (general output)
-            try:
-                while True:
-                    line = stdout_queue.get_nowait()
-                    if line is None:
-                        break
-                    line = line.strip()
-                    if line:
-                        stdout_lines.append(line)
-                        if 'error' in line.lower():
-                            error_output.append(line)
-                            logger.error(f"❌ {line}")
-            except queue.Empty:
-                pass
-        
-        # Get return code (process has already completed)
-        return_code = process.returncode
-        
-        # Create a result-like object for compatibility
-        class Result:
-            def __init__(self, returncode, stderr, stdout):
-                self.returncode = returncode
-                self.stderr = '\n'.join(stderr) if stderr else ''
-                self.stdout = '\n'.join(stdout) if stdout else ''
-        
-        result = Result(return_code, error_output, stdout_lines)
-        
-        if result.returncode == 0:
+        if return_code == 0:
             # Download successful, move file from temp to final location
             if download_audio_only:
                 # Audio file - simple move
@@ -778,11 +626,7 @@ def get_debate_audio(page_url=None, download_audio_only=None, audio_format=None,
             
             logger.info("🎉 Process completed! Check the folder.")
         else:
-            logger.error(f"❌ Download failed with return code {result.returncode}")
-            if result.stdout:
-                logger.error(f"stdout: {result.stdout}")
-            if result.stderr:
-                logger.error(f"stderr: {result.stderr}")
+            logger.error(f"❌ Download failed with return code {return_code}")
     else:
         logger.error("❌ Could not find .m3u8 link. The site may have changed or took too long to load.")
 

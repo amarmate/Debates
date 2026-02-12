@@ -1,0 +1,4 @@
+# Future improvements
+
+- Add more reference transcripts to data/benchmark/refs/ for benchmarking
+- Consider adding pre-commit hooks for linting
