@@ -1,0 +1,16 @@
+services:
+  debates:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: debates:latest
+    container_name: debates
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+    volumes:
+      - ../data/debates:/app/data/debates
+      - ../data/transcripts:/app/data/transcripts
+      - ../data/links:/app/data/links
+    # Override CMD for different entrypoints:
+    # docker compose -f docker/docker-compose.yml run debates uv run python scripts/test_first_debate.py
+    # docker compose -f docker/docker-compose.yml run debates uv run python process_debates.py --model inesc-id/WhisperLv3-EP-X

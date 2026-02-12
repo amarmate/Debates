@@ -1,0 +1,31 @@
+# Git and IDE
+.git
+.gitignore
+.gitattributes
+.cursor
+.venv
+env
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Outputs (use volumes at runtime)
+data/debates
+data/transcripts
+data/benchmark/results
+
+# Temp and logs
+data/temp
+*.log
+error_log.txt
+test_*.txt
+testaudio.txt
+
+# Docs and misc
+README.md
+TODO
+*.md
+.dockerignore

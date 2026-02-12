@@ -125,6 +125,16 @@ uv run python scripts/benchmark_transcription.py
 uv run python scripts/migrate_links_to_unified.py
 ```
 
+## Docker
+
+Run the pipeline in a container (no local PyAV/FFmpeg dev libs or Chromium needed). All Docker files live in **`docker/`**—see **[`docker/README.md`](docker/README.md)** for full instructions.
+
+```bash
+# Quick start (from project root)
+docker build -f docker/Dockerfile -t debates:latest .
+docker run --rm -e HF_TOKEN=<token> -v "$(pwd)/data:/app/data" debates:latest
+```
+
 ## Dependencies
 
 - `playwright` - For browser automation to intercept network requests
