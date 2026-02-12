@@ -11,11 +11,12 @@ os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 import logging
 import torch
 
-# PyTorch 2.6+ defaults weights_only=True; pyannote/speechbrain checkpoints use OmegaConf
+# PyTorch 2.6+ defaults weights_only=True; pyannote/speechbrain checkpoints use OmegaConf and typing
 try:
     from omegaconf import ListConfig, DictConfig
     from omegaconf.base import ContainerMetadata
-    torch.serialization.add_safe_globals([ListConfig, DictConfig, ContainerMetadata])
+    import typing
+    torch.serialization.add_safe_globals([ListConfig, DictConfig, ContainerMetadata, typing.Any, typing.List, typing.Dict, typing.Union, typing.Optional, typing.Tuple])
 except ImportError:
     pass
 
