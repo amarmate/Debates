@@ -36,20 +36,26 @@ def _patched_load(*args, **kwargs):
 
 torch.load = _patched_load
 
-# Allowlist OmegaConf container types for safe serialization, so calls that
+# Allowlist all OmegaConf classes for safe serialization, so calls that
 # *do* pass weights_only=True (inside pyannote/whisperx/speechbrain) can
-# still succeed without raising WeightsUnpickler errors.
+# still succeed without raising WeightsUnpickler errors about ListConfig,
+# DictConfig, ContainerMetadata, etc.
 try:
+    import inspect as _inspect
     import omegaconf as _omegaconf
     import torch.serialization as _ts
 
     if hasattr(_ts, "add_safe_globals"):
-        _ts.add_safe_globals(
-            [
-                _omegaconf.listconfig.ListConfig,
-                _omegaconf.dictconfig.DictConfig,
-            ]
-        )
+        _safe_omega_types = []
+        for _mod_name in ("listconfig", "dictconfig", "base", "nodes"):
+            _mod = getattr(_omegaconf, _mod_name, None)
+            if _mod is None:
+                continue
+            for _name, _obj in vars(_mod).items():
+                if _inspect.isclass(_obj):
+                    _safe_omega_types.append(_obj)
+        if _safe_omega_types:
+            _ts.add_safe_globals(_safe_omega_types)
 except Exception:
     # Best‑effort: if this fails (older PyTorch or missing OmegaConf),
     # we silently continue with the patched torch.load above.

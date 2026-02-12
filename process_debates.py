@@ -6,6 +6,7 @@ Orchestration script to download debates and transcribe them.
 import argparse
 import logging
 import os
+import subprocess
 import sys
 from datetime import datetime
 
@@ -31,16 +32,74 @@ except ImportError as e:
 # Error logging configuration
 ERROR_LOG_FILE = "error_log.txt"
 
+
 def log_error(message, error_details=None):
     """Log error to console and file"""
-    logger.error(f"❌ {message}")
-    
+    logger.error("❌ %s", message)
+
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(ERROR_LOG_FILE, "a", encoding="utf-8") as f:
         f.write(f"[{timestamp}] {message}\n")
         if error_details:
             f.write(f"{error_details}\n")
         f.write("-" * 40 + "\n")
+
+
+def _run_transcription_subprocess(
+    audio_file: os.PathLike | str,
+    args: argparse.Namespace,
+) -> None:
+    """
+    Run transcription for a single audio file in a separate Python process.
+
+    This isolates GPU memory usage per file, ensuring that all CUDA state and
+    model weights are fully released when the child process exits. This is
+    much more robust against CUDA out-of-memory errors than trying to
+    manually free all model references within a long‑running process.
+    """
+    audio_file = str(audio_file)
+    script_path = os.path.join(os.getcwd(), "transcribe_audio.py")
+
+    cmd: list[str] = [
+        sys.executable,
+        script_path,
+        audio_file,
+        args.model,
+    ]
+
+    # Map CLI flags from this orchestrator to the child process script
+    if args.no_diarization:
+        cmd.append("--no-diarization")
+    if args.no_vad:
+        cmd.append("--no-vad")
+    if args.no_overlap_detection:
+        cmd.append("--no-overlap-detection")
+
+    if args.prompt:
+        cmd.extend(["--prompt", args.prompt])
+
+    cmd.extend(
+        [
+            "--condition-on-previous-text",
+            str(args.condition_on_previous_text).lower(),
+            "--compression-ratio-threshold",
+            str(args.compression_ratio_threshold),
+        ]
+    )
+
+    if args.chunk_length_s is not None:
+        cmd.extend(["--chunk-length-s", str(args.chunk_length_s)])
+
+    logger.info("Starting transcription subprocess: %s", " ".join(cmd))
+
+    # Let stdout/stderr stream directly so the user sees detailed logs
+    completed = subprocess.run(cmd)
+
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"Transcription subprocess failed with exit code {completed.returncode} "
+            f"for file {audio_file}"
+        )
 
 def main():
     parser = argparse.ArgumentParser(description="Download and transcribe debates.")
@@ -113,18 +172,7 @@ def main():
             
             # Transcribe
             logger.info("🎙️  Transcribing...")
-            transcribe_audio(
-                str(audio_file),
-                language="pt",
-                model_size=args.model,
-                enable_diarization=not args.no_diarization,
-                enable_vad=not args.no_vad,
-                initial_prompt=args.prompt,
-                condition_on_previous_text=str(args.condition_on_previous_text).lower() in ("1", "true", "yes", "y", "on"),
-                compression_ratio_threshold=args.compression_ratio_threshold,
-                chunk_length_s=args.chunk_length_s,
-                enable_overlap_detection=not args.no_overlap_detection,
-            )
+            _run_transcription_subprocess(audio_file, args)
             success_count += 1
             logger.info(f"✅ Transcription saved to: {txt_file.name}")
             
