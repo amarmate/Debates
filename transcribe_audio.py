@@ -20,7 +20,7 @@ import torch
 # ---------------------------------------------------------------------------
 import collections
 
-_safe_builtins = [list, dict, tuple, set, frozenset, collections.OrderedDict]
+_safe_builtins = [list, dict, tuple, set, frozenset, collections.OrderedDict, collections.defaultdict]
 torch.serialization.add_safe_globals(_safe_builtins)
 
 try:
