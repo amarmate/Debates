@@ -608,6 +608,69 @@ def _segments_overlap(a_start: float, a_end: float, b_start: float, b_end: float
     return max(a_start, b_start) < min(a_end, b_end)
 
 
+def _merge_overlap_regions(regions: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    """Merge overlapping or adjacent regions into a sorted, non-overlapping list."""
+    if not regions:
+        return []
+    sorted_regions = sorted(regions, key=lambda r: r[0])
+    merged: List[Tuple[float, float]] = [sorted_regions[0]]
+    for start, end in sorted_regions[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end:
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def compute_overlap_regions_from_diarization(
+    speaker_segments: List[Tuple[float, float, str]]
+) -> List[Tuple[float, float]]:
+    """
+    Derive overlap regions from diarization output by finding intervals where
+    2+ different speakers are active at the same time.
+
+    Handles 3-way (or more) overlap when pyannote diarization outputs overlapping
+    speaker segments. Returns empty list if diarization produces non-overlapping
+    (partition) output.
+
+    Returns:
+        List of (start, end) tuples for overlapped regions in seconds.
+    """
+    if not speaker_segments:
+        return []
+
+    events: List[Tuple[float, int, str]] = []  # (time, +1 or -1, speaker)
+    for start, end, speaker in speaker_segments:
+        events.append((start, 1, speaker))
+        events.append((end, -1, speaker))
+
+    # Sort by time; for same time, process +1 before -1 (start before end)
+    events.sort(key=lambda x: (x[0], -x[1]))
+
+    active_speakers: set = set()
+    overlap_regions: List[Tuple[float, float]] = []
+    overlap_start: Optional[float] = None
+
+    for t, delta, speaker in events:
+        if delta == 1:
+            active_speakers.add(speaker)
+        else:
+            active_speakers.discard(speaker)
+
+        if len(active_speakers) >= 2:
+            if overlap_start is None:
+                overlap_start = t
+        else:
+            if overlap_start is not None:
+                overlap_regions.append((overlap_start, t))
+                overlap_start = None
+
+    if overlap_regions:
+        logger.info("Diarization-based overlap: %d region(s) where 2+ speakers active", len(overlap_regions))
+    return overlap_regions
+
+
 def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "base", 
                      enable_diarization: bool = True, num_speakers: Optional[int] = None,
                      enable_vad: bool = True, initial_prompt: Optional[str] = None,
@@ -746,14 +809,25 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
         for segment in segments:
             segment["speaker"] = "UNKNOWN"
 
-    # Overlap detection: flag segments where two speakers talk at once
+    # Overlap detection: flag segments where two or more speakers talk at once
     overlap_regions: List[Tuple[float, float]] = []
     if enable_overlap_detection:
         overlap_regions = perform_overlap_detection(audio_path)
+        # Also derive overlap from diarization (catches 3-way overlap when
+        # pyannote outputs overlapping speaker segments)
+        if speaker_segments:
+            diar_overlaps = compute_overlap_regions_from_diarization(speaker_segments)
+            overlap_regions = _merge_overlap_regions(overlap_regions + diar_overlaps)
+    # Small padding to account for timing drift between Whisper and pyannote
+    OVERLAP_MATCH_PADDING_S = 0.15
     for segment in segments:
         seg_overlap = False
+        seg_start, seg_end = segment["start"], segment["end"]
         for ov_start, ov_end in overlap_regions:
-            if _segments_overlap(segment["start"], segment["end"], ov_start, ov_end):
+            # Expand overlap region slightly to catch boundary misalignments
+            pad_start = max(0, ov_start - OVERLAP_MATCH_PADDING_S)
+            pad_end = ov_end + OVERLAP_MATCH_PADDING_S
+            if _segments_overlap(seg_start, seg_end, pad_start, pad_end):
                 seg_overlap = True
                 break
         segment["overlap"] = seg_overlap

@@ -17,6 +17,13 @@ from debate_downloader import get_debate_audio
 from download_all_debates import create_debate_title, create_debate_filename, DOWNLOAD_FOLDER
 
 logger = logging.getLogger(__name__)
+
+
+def _debate_already_downloaded(filename_base: str) -> bool:
+    """Return True if this debate is already in the download folder (never re-download)."""
+    if not DOWNLOAD_FOLDER.exists():
+        return False
+    return any(f.is_file() for f in DOWNLOAD_FOLDER.glob(f"{filename_base}.*"))
 from transcribe_audio import transcribe_audio
 
 CSV_FILE = Path("data/links/debates_unified.csv")
@@ -50,20 +57,23 @@ def main() -> int:
     logger.info("URL: %s", url)
     logger.info("Model: %s", model_size)
 
-    # Download
+    # Download (skip if already available)
     filename_base = create_debate_filename(row)
-    logger.info("Step 1: Downloading...")
-    try:
-        get_debate_audio(
-            page_url=url,
-            download_audio_only=True,
-            audio_format="mp3",
-            title=title,
-            filename_base=filename_base,
-        )
-    except Exception as e:
-        logger.error("Download failed: %s", e)
-        return 1
+    if _debate_already_downloaded(filename_base):
+        logger.info("Step 1: Already downloaded, skipping...")
+    else:
+        logger.info("Step 1: Downloading...")
+        try:
+            get_debate_audio(
+                page_url=url,
+                download_audio_only=True,
+                audio_format="mp3",
+                title=title,
+                filename_base=filename_base,
+            )
+        except Exception as e:
+            logger.error("Download failed: %s", e)
+            return 1
 
     # Find the downloaded file: prefer one matching our filename_base, else most recent
     if not DOWNLOAD_FOLDER.exists():
