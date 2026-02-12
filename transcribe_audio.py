@@ -32,6 +32,25 @@ warnings.filterwarnings("ignore", message=".*libtorchcodec.*")
 # Suppress std() degrees of freedom warning from pyannote pooling
 warnings.filterwarnings("ignore", message=".*std\\(\\): degrees of freedom.*")
 
+# Folder for annotated transcripts (speaker labels, overlap markers)
+TRANSCRIPTS_FOLDER = Path("data/transcripts")
+
+def _is_whisperx_model(model_name: str) -> bool:
+    """Return True if model should be loaded via WhisperX (Hugging Face path, e.g. inesc-id/WhisperLv3-EP-X)."""
+    return "/" in model_name
+
+
+def _model_name_for_path(model_name: str) -> str:
+    """Sanitize model name for use in filenames (replace / and other chars)."""
+    return model_name.replace("/", "_").replace("\\", "_")
+
+
+def get_transcript_path(audio_path: str, model_size: str) -> Path:
+    """Return the path where the transcript will be saved for given audio and model."""
+    stem = Path(audio_path).stem
+    label = _model_name_for_path(model_size)
+    return TRANSCRIPTS_FOLDER / f"{stem}_{label}.txt"
+
 
 class TranscriptionProgress:
     """Helper class to track transcription progress with tqdm"""
@@ -712,10 +731,7 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
         if vad_segments is None:
             logger.info("Continuing without VAD filtering...")
 
-    logger.info("Loading Whisper model '%s'...", model_size)
-    model = whisper.load_model(model_size)
-    
-    # Look up metadata from CSV files if prompt not provided
+    # Look up metadata and build initial prompt before loading model (WhisperX needs it at load time)
     if initial_prompt is None:
         metadata = lookup_debate_metadata(audio_path)
         initial_prompt = build_initial_prompt(metadata)
@@ -725,36 +741,84 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
                 metadata.get("candidate1", ""), metadata.get("candidate2", ""), metadata.get("date", ""),
             )
 
+    use_whisperx = _is_whisperx_model(model_size)
+    model_label = _model_name_for_path(model_size)  # for progress bar and output filename
+
+    if use_whisperx:
+        try:
+            import whisperx
+        except ImportError:
+            logger.error(
+                "WhisperX is required for Hugging Face models like '%s'. "
+                "Install with: pip install whisperx",
+                model_size,
+            )
+            return None
+
+        logger.info("Loading WhisperX model '%s'...", model_size)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        compute_type = "float16" if device == "cuda" else "int8"
+        asr_options = {}
+        if initial_prompt:
+            asr_options["initial_prompt"] = initial_prompt
+        model = whisperx.load_model(
+            model_size,
+            device=device,
+            compute_type=compute_type,
+            language=language,
+            task="transcribe",
+            asr_options=asr_options,
+        )
+    else:
+        logger.info("Loading Whisper model '%s'...", model_size)
+        model = whisper.load_model(model_size)
+
     logger.info("Starting transcription...")
     if initial_prompt:
         logger.info("Using initial prompt: %s...", initial_prompt[:100])
-    
+
     # Use progress context manager
-    with TranscriptionProgress(duration, model_size) as progress:
+    with TranscriptionProgress(duration, model_label) as progress:
         # Update progress in a separate thread
         def update_loop():
             while not progress.done:
                 progress.update()
                 time.sleep(0.5)  # Update every 500ms
-        
+
         update_thread = threading.Thread(target=update_loop, daemon=True)
         update_thread.start()
-        
+
         try:
-            # Transcribe with Portuguese language specified and initial prompt
-            # verbose=False suppresses Whisper's built-in progress (we use our own)
-            # initial_prompt helps guide the model and reduce hallucinations
-            # Anti-repetition: condition_on_previous_text=False, lower compression_ratio_threshold
-            transcribe_kwargs = dict(
-                language=language,
-                verbose=False,
-                initial_prompt=initial_prompt,
-                condition_on_previous_text=condition_on_previous_text,
-                compression_ratio_threshold=compression_ratio_threshold,
-            )
-            if chunk_length_s is not None:
-                transcribe_kwargs["chunk_length_s"] = chunk_length_s
-            result = model.transcribe(audio_path, **transcribe_kwargs)
+            if use_whisperx:
+                from whisperx.audio import load_audio
+
+                audio_array = load_audio(audio_path)
+                transcribe_kwargs = dict(
+                    batch_size=16,
+                    print_progress=False,
+                    verbose=False,
+                )
+                wx_result = model.transcribe(audio_array, **transcribe_kwargs)
+                # Normalize to same format as openai-whisper
+                segments = wx_result.get("segments", [])
+                result = {
+                    "segments": segments,
+                    "text": " ".join(s.get("text", "").strip() for s in segments),
+                }
+            else:
+                # Transcribe with Portuguese language specified and initial prompt
+                # verbose=False suppresses Whisper's built-in progress (we use our own)
+                # initial_prompt helps guide the model and reduce hallucinations
+                transcribe_kwargs = dict(
+                    language=language,
+                    verbose=False,
+                    initial_prompt=initial_prompt,
+                    condition_on_previous_text=condition_on_previous_text,
+                    compression_ratio_threshold=compression_ratio_threshold,
+                )
+                if chunk_length_s is not None:
+                    transcribe_kwargs["chunk_length_s"] = chunk_length_s
+                result = model.transcribe(audio_path, **transcribe_kwargs)
         finally:
             progress.done = True
             time.sleep(0.6)  # Allow final update
@@ -865,9 +929,10 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
     else:
         annotated_text = result["text"]
     
-    # Save annotated text to file (include model in filename, e.g. debate_base.txt)
+    # Save annotated text to data/transcripts/ (speaker labels, [!] overlap markers)
     audio_file = Path(audio_path)
-    output_path = audio_file.parent / f"{audio_file.stem}_{model_size}.txt"
+    TRANSCRIPTS_FOLDER.mkdir(parents=True, exist_ok=True)
+    output_path = TRANSCRIPTS_FOLDER / f"{audio_file.stem}_{model_label}.txt"
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(annotated_text)
     
@@ -919,8 +984,7 @@ if __name__ == "__main__":
     # Default to test_debate.mp3 if no argument provided
     audio_file = sys.argv[1] if len(sys.argv) > 1 else "test_debate.mp3"
     
-    # Optional: specify model size (tiny, base, small, medium, large)
-    # base is a good balance between speed and accuracy
+    # Optional: specify model (tiny, base, small, medium, large, or Hugging Face path like inesc-id/WhisperLv3-EP-X)
     model_size = sys.argv[2] if len(sys.argv) > 2 else "base"
     
     # Optional: specify number of speakers (if known)

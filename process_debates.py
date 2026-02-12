@@ -23,7 +23,7 @@ logger = logging.getLogger("process_debates")
 
 try:
     from download_all_debates import download_all_debates, DOWNLOAD_FOLDER
-    from transcribe_audio import transcribe_audio
+    from transcribe_audio import transcribe_audio, get_transcript_path, TRANSCRIPTS_FOLDER
 except ImportError as e:
     logger.error("Error importing modules: %s. Make sure download_all_debates.py and transcribe_audio.py are in the current directory.", e)
     sys.exit(1)
@@ -44,7 +44,11 @@ def log_error(message, error_details=None):
 
 def main():
     parser = argparse.ArgumentParser(description="Download and transcribe debates.")
-    parser.add_argument("--model", default="base", help="Whisper model size (tiny, base, small, medium, large)")
+    parser.add_argument(
+        "--model",
+        default="base",
+        help="ASR model: Whisper size (tiny, base, small, medium, large) or Hugging Face path (e.g. inesc-id/WhisperLv3-EP-X)",
+    )
     parser.add_argument("--csv", default="data/links/debates_unified.csv", help="Path to CSV file with debate links (default: data/links/debates_unified.csv)")
     parser.add_argument("--no-diarization", action="store_true", help="Disable speaker diarization")
     parser.add_argument("--no-vad", action="store_true", help="Disable Voice Activity Detection (VAD)")
@@ -98,7 +102,7 @@ def main():
 
     for i, audio_file in enumerate(audio_files, 1):
         try:
-            txt_file = audio_file.parent / f"{audio_file.stem}_{args.model}.txt"
+            txt_file = get_transcript_path(str(audio_file), args.model)
 
             logger.info(f"\nProcessing {i}/{len(audio_files)}: {audio_file.name}")
 

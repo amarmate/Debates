@@ -63,9 +63,13 @@ The `transcribe_audio.py` script transcribes audio files using OpenAI Whisper an
 python transcribe_audio.py audio_file.mp3
 ```
 
-**Specify Whisper model size:**
+**Specify ASR model** (Whisper size or Hugging Face path):
 ```powershell
+# Standard Whisper models (tiny, base, small, medium, large)
 python transcribe_audio.py audio_file.mp3 base
+
+# European Portuguese fine-tuned model (requires whisperx)
+python transcribe_audio.py audio_file.mp3 inesc-id/WhisperLv3-EP-X
 ```
 
 **Specify number of speakers (if known):**
@@ -88,7 +92,7 @@ python transcribe_audio.py audio_file.mp3 --no-overlap-detection
 python transcribe_audio.py audio_file.mp3 --condition-on-previous-text false --compression-ratio-threshold 2.0
 ```
 
-The output will be saved to `audio_file_model.txt` (e.g. `debate_base.txt` when using the base model) with speaker annotations in the format:
+The output will be saved to `data/transcripts/{audio_stem}_{model}.txt` (e.g. `data/transcripts/2025-04-07_AD-vs-CDU_TVI_base.txt`) with speaker annotations in the format:
 ```
 [SPEAKER_00]:
 Text spoken by speaker 00...
@@ -125,7 +129,8 @@ uv run python scripts/migrate_links_to_unified.py
 
 - `playwright` - For browser automation to intercept network requests
 - `yt-dlp` - For downloading and converting video streams to audio
-- `openai-whisper` - For audio transcription
+- `openai-whisper` - For audio transcription (tiny, base, small, medium, large)
+- `whisperx` - For Hugging Face models (e.g. `inesc-id/WhisperLv3-EP-X` for European Portuguese)
 - `pyannote.audio` - For speaker diarization and overlapped speech detection
 - `librosa` - For audio processing
 - `tqdm` - For progress bars

@@ -80,7 +80,11 @@ def main() -> int:
     )
     parser.add_argument("--audio-dir", type=Path, default=AUDIO_DIR, help="Directory containing audio files")
     parser.add_argument("--ref-dir", type=Path, default=BENCHMARK_REFS, help="Directory containing reference .txt transcripts")
-    parser.add_argument("--model", default="base", help="Whisper model size (tiny, base, small, medium, large)")
+    parser.add_argument(
+        "--model",
+        default="base",
+        help="ASR model: Whisper size or HF path (e.g. inesc-id/WhisperLv3-EP-X)",
+    )
     parser.add_argument("--no-diarization", action="store_true", help="Disable speaker diarization (faster for benchmarking)")
     parser.add_argument("--no-vad", action="store_true", help="Disable VAD")
     parser.add_argument("--output", type=Path, help="Write results JSON path")

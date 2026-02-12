@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from debate_downloader import get_debate_audio
 from download_all_debates import create_debate_title, create_debate_filename, DOWNLOAD_FOLDER
+from transcribe_audio import transcribe_audio, get_transcript_path, TRANSCRIPTS_FOLDER
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +25,17 @@ def _debate_already_downloaded(filename_base: str) -> bool:
     if not DOWNLOAD_FOLDER.exists():
         return False
     return any(f.is_file() for f in DOWNLOAD_FOLDER.glob(f"{filename_base}.*"))
-from transcribe_audio import transcribe_audio
 
 CSV_FILE = Path("data/links/debates_unified.csv")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Download and transcribe the first debate.")
-    parser.add_argument("--model", default="base", help="Whisper model size (tiny, base, small, medium, large)")
+    parser.add_argument(
+        "--model",
+        default="base",
+        help="ASR model: Whisper size (tiny, base, small, medium, large) or HF path (e.g. inesc-id/WhisperLv3-EP-X)",
+    )
     args = parser.parse_args()
     model_size = args.model
     if not CSV_FILE.exists():
@@ -107,7 +111,7 @@ def main() -> int:
         logger.error("Transcription failed: %s", e)
         return 1
 
-    txt_path = audio_path.parent / f"{audio_path.stem}_{model_size}.txt"
+    txt_path = get_transcript_path(str(audio_path), model_size)
     logger.info("=" * 60)
     logger.info("Done!")
     logger.info("Audio: %s", audio_path)
