@@ -57,13 +57,14 @@ def _run_transcription_subprocess(
     much more robust against CUDA out-of-memory errors than trying to
     manually free all model references within a long‑running process.
     """
-    audio_file = str(audio_file)
-    script_path = os.path.join(os.getcwd(), "transcribe_audio.py")
+    audio_path = os.path.abspath(str(audio_file))
+    script_path = os.path.abspath(os.path.join(os.getcwd(), "transcribe_audio.py"))
+    cwd = os.getcwd()
 
     cmd: list[str] = [
         sys.executable,
         script_path,
-        audio_file,
+        audio_path,
         args.model,
     ]
 
@@ -92,13 +93,14 @@ def _run_transcription_subprocess(
 
     logger.info("Starting transcription subprocess: %s", " ".join(cmd))
 
-    # Let stdout/stderr stream directly so the user sees detailed logs
-    completed = subprocess.run(cmd)
+    # Let stdout/stderr stream directly so the user sees detailed logs.
+    # cwd and env are inherited so HF token and paths resolve correctly.
+    completed = subprocess.run(cmd, cwd=cwd)
 
     if completed.returncode != 0:
         raise RuntimeError(
             f"Transcription subprocess failed with exit code {completed.returncode} "
-            f"for file {audio_file}"
+            f"for file {audio_path}"
         )
 
 def main():

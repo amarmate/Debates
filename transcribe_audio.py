@@ -901,6 +901,13 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
         
         # Rebuild full text from filtered segments
         result["text"] = " ".join(seg["text"].strip() for seg in filtered_segments)
+
+    # Free Whisper model before diarization to avoid GPU OOM when loading pyannote
+    if "model" in locals():
+        del model
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     
     # Perform speaker diarization if enabled
     speaker_segments = None
@@ -1018,6 +1025,8 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
 
 
 if __name__ == "__main__":
+    import argparse as _argparse
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(message)s",
@@ -1031,57 +1040,49 @@ if __name__ == "__main__":
         pyannote_available = True
     except ImportError:
         pass
-    
-    # Default to test_debate.mp3 if no argument provided
-    audio_file = sys.argv[1] if len(sys.argv) > 1 else "test_debate.mp3"
-    
-    # Optional: specify model (tiny, base, small, medium, large, or Hugging Face path like inesc-id/WhisperLv3-EP-X)
-    model_size = sys.argv[2] if len(sys.argv) > 2 else "base"
-    
-    # Optional: specify number of speakers (if known)
-    num_speakers = None
-    if len(sys.argv) > 3:
-        try:
-            num_speakers = int(sys.argv[3])
-        except ValueError:
-            logger.warning("Invalid number of speakers '%s', using auto-detection", sys.argv[3])
-    
-    # Optional: disable diarization with --no-diarization flag
-    enable_diarization = "--no-diarization" not in sys.argv
-    
-    # Optional: disable VAD with --no-vad flag
-    enable_vad = "--no-vad" not in sys.argv
 
-    # Optional: disable overlap detection
-    enable_overlap_detection = "--no-overlap-detection" not in sys.argv
+    parser = _argparse.ArgumentParser(
+        description="Transcribe audio with Whisper and optional speaker diarization",
+    )
+    parser.add_argument("audio_file", nargs="?", default="test_debate.mp3", help="Path to audio file")
+    parser.add_argument("model_size", nargs="?", default="base", help="Whisper model (tiny, base, small, medium, large) or HF path")
+    parser.add_argument(
+        "--num-speakers",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Number of speakers for diarization (auto-detected if omitted)",
+    )
+    parser.add_argument("--no-diarization", action="store_true", help="Disable speaker diarization")
+    parser.add_argument("--no-vad", action="store_true", help="Disable Voice Activity Detection")
+    parser.add_argument("--no-overlap-detection", action="store_true", help="Disable overlapped speech detection")
+    parser.add_argument("--prompt", help="Custom initial prompt for transcription")
+    parser.add_argument(
+        "--condition-on-previous-text",
+        type=str,
+        default="false",
+        help="Whisper condition_on_previous_text (true/false)",
+    )
+    parser.add_argument(
+        "--compression-ratio-threshold",
+        type=float,
+        default=2.0,
+        help="Whisper compression_ratio_threshold",
+    )
+    parser.add_argument("--chunk-length-s", type=int, default=None, help="Whisper chunk_length_s")
+    cli_args = parser.parse_args()
 
-    # Optional: Whisper anti-repetition (defaults reduce hallucinations)
-    condition_on_previous_text = False
-    compression_ratio_threshold = 2.0
-    chunk_length_s = None
-    if "--condition-on-previous-text" in sys.argv:
-        idx = sys.argv.index("--condition-on-previous-text")
-        if idx + 1 < len(sys.argv):
-            condition_on_previous_text = sys.argv[idx + 1].lower() in ("1", "true", "yes", "y", "on")
-    if "--compression-ratio-threshold" in sys.argv:
-        idx = sys.argv.index("--compression-ratio-threshold")
-        if idx + 1 < len(sys.argv):
-            compression_ratio_threshold = float(sys.argv[idx + 1])
-    if "--chunk-length-s" in sys.argv:
-        idx = sys.argv.index("--chunk-length-s")
-        if idx + 1 < len(sys.argv):
-            chunk_length_s = int(sys.argv[idx + 1])
-    
-    # Optional: custom initial prompt
-    initial_prompt = None
-    if "--prompt" in sys.argv:
-        try:
-            prompt_idx = sys.argv.index("--prompt")
-            if prompt_idx + 1 < len(sys.argv):
-                initial_prompt = sys.argv[prompt_idx + 1]
-        except (ValueError, IndexError):
-            logger.warning("--prompt flag provided but no prompt text found")
-    
+    audio_file = cli_args.audio_file
+    model_size = cli_args.model_size
+    num_speakers = cli_args.num_speakers
+    enable_diarization = not cli_args.no_diarization
+    enable_vad = not cli_args.no_vad
+    enable_overlap_detection = not cli_args.no_overlap_detection
+    initial_prompt = cli_args.prompt
+    condition_on_previous_text = str(cli_args.condition_on_previous_text).lower() in ("1", "true", "yes", "y", "on")
+    compression_ratio_threshold = cli_args.compression_ratio_threshold
+    chunk_length_s = cli_args.chunk_length_s
+
     # Warn if diarization is enabled but pyannote is not available
     if enable_diarization and not pyannote_available:
         uv_lock_exists = Path("uv.lock").exists()
