@@ -13,8 +13,9 @@ import torch
 
 # PyTorch 2.6+ defaults weights_only=True; pyannote/speechbrain checkpoints use OmegaConf
 try:
-    from omegaconf import ListConfig
-    torch.serialization.add_safe_globals([ListConfig])
+    from omegaconf import ListConfig, DictConfig
+    from omegaconf.base import ContainerMetadata
+    torch.serialization.add_safe_globals([ListConfig, DictConfig, ContainerMetadata])
 except ImportError:
     pass
 
