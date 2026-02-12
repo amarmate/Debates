@@ -66,6 +66,8 @@ warnings.filterwarnings("ignore", message=".*torchcodec.*")
 warnings.filterwarnings("ignore", message=".*libtorchcodec.*")
 # Suppress std() degrees of freedom warning from pyannote pooling
 warnings.filterwarnings("ignore", message=".*std\\(\\): degrees of freedom.*")
+# Suppress torchaudio MP3 bits_per_sample warning (MPEG_LAYER_III subtype unknown)
+warnings.filterwarnings("ignore", message=".*MPEG_LAYER_III.*")
 
 # Folder for annotated transcripts (speaker labels, overlap markers)
 TRANSCRIPTS_FOLDER = Path("data/transcripts")
