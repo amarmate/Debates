@@ -4,10 +4,10 @@ Test script: download the first debate from debates_unified.csv and transcribe i
 Runs the same pipeline as process_debates for a single debate.
 """
 
+import argparse
 import csv
 import sys
 from pathlib import Path
-from datetime import datetime
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -20,6 +20,10 @@ CSV_FILE = Path("data/links/debates_unified.csv")
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Download and transcribe the first debate.")
+    parser.add_argument("--model", default="base", help="Whisper model size (tiny, base, small, medium, large)")
+    args = parser.parse_args()
+    model_size = args.model
     if not CSV_FILE.exists():
         print(f"Error: {CSV_FILE} not found")
         return 1
@@ -41,6 +45,7 @@ def main() -> int:
     print("=" * 60)
     print(f"Debate: {title}")
     print(f"URL: {url}")
+    print(f"Model: {model_size}")
     print()
 
     # Download
@@ -80,7 +85,7 @@ def main() -> int:
         transcribe_audio(
             str(audio_path),
             language="pt",
-            model_size="base",
+            model_size=model_size,
             enable_diarization=True,
             enable_vad=True,
             condition_on_previous_text=False,
@@ -91,7 +96,6 @@ def main() -> int:
         print(f"Transcription failed: {e}")
         return 1
 
-    model_size = "base"
     txt_path = audio_path.parent / f"{audio_path.stem}_{model_size}.txt"
     print()
     print("=" * 60)
