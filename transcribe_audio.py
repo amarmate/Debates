@@ -28,6 +28,23 @@ def _patched_load(*args, **kwargs):
 
 torch.load = _patched_load
 
+# ---------------------------------------------------------------------------
+# huggingface_hub deprecated use_auth_token in favor of token. pyannote.audio
+# 3.x still passes use_auth_token to hf_hub_download, which raises. We
+# monkey-patch to translate use_auth_token -> token before the call.
+# ---------------------------------------------------------------------------
+import huggingface_hub
+_orig_hf_hub_download = huggingface_hub.hf_hub_download
+
+
+def _patched_hf_hub_download(*args, **kwargs):
+    if "use_auth_token" in kwargs:
+        kwargs.setdefault("token", kwargs.pop("use_auth_token"))
+    return _orig_hf_hub_download(*args, **kwargs)
+
+
+huggingface_hub.hf_hub_download = _patched_hf_hub_download
+
 import gc
 import whisper
 import sys
@@ -180,18 +197,13 @@ def perform_speaker_diarization(audio_path: str, num_speakers: Optional[int] = N
     logger.info("Performing speaker diarization...")
     try:
         # Use file path directly - most reliable; pyannote handles loading/resampling internally
-        # In-memory dict input can fail on some systems (torchcodec/backend issues)
         audio_input = audio_path
 
-        # OPTIMIZATION: Use min_duration_off to skip very short silence segments (speeds up processing)
-        diarization_params: dict = {
-            "min_duration_off": 0.5  # Ignore silence segments shorter than 0.5s
-        }
-        # Political debates typically have 2 candidates; auto-detection can fail
-        effective_num_speakers = num_speakers if num_speakers is not None else 2
-        diarization_params["num_speakers"] = effective_num_speakers
+        # Political debates typically have 2 candidates + moderator; auto-detection can fail
+        effective_num_speakers = num_speakers if num_speakers is not None else 3
+        diarization_params: dict = {"num_speakers": effective_num_speakers}
         if num_speakers is None:
-            logger.info("Using num_speakers=2 (debate default); override with --num-speakers N")
+            logger.info("Using num_speakers=3 (debate default); override with --num-speakers N")
 
         # Show progress indicator for long-running diarization
         logger.info("Processing diarization (this may take a while for long audio files)...")

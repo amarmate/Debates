@@ -114,7 +114,7 @@ def main():
     )
     parser.add_argument("--csv", default="data/links/debates_unified.csv", help="Path to CSV file with debate links (default: data/links/debates_unified.csv)")
     parser.add_argument("--no-diarization", action="store_true", help="Disable speaker diarization")
-    parser.add_argument("--num-speakers", type=int, default=None, help="Number of speakers for diarization (default: 2 for debates)")
+    parser.add_argument("--num-speakers", type=int, default=3, help="Number of speakers for diarization (default: 3 for debates)")
     parser.add_argument("--no-vad", action="store_true", help="Disable Voice Activity Detection (VAD)")
     parser.add_argument("--no-overlap-detection", action="store_true", help="Disable overlapped speech detection")
     parser.add_argument("--prompt", help="Custom initial prompt for transcription (default: Portuguese political debate prompt)")
