@@ -127,96 +127,106 @@ async def index():
     return HTMLResponse("<h1>Speech-to-Fact</h1><p>Place index.html in pipeline/server/static/</p>")
 
 
-async def _process_file_chunk(
-    ws: WebSocket,
-    audio_int16: np.ndarray,
-    sample_rate: int,
-    language: Optional[str],
-    model_size: str,
-    last_context_ref: list,
-    first_prompt_ref: list,
-    trim_silence_file: bool,
-    chunk_index: int = 0,
-    chunk_duration: float = 6.0,
-    debug_frames: bool = False,
-) -> None:
-    """Transcribe one file chunk and send result."""
-    audio_float = audio_int16.astype(np.float32) / 32768.0
-    audio_16k = resample_to_16k(audio_float, sample_rate)
-    if trim_silence_file:
-        audio_16k = trim_silence(audio_16k, TARGET_SAMPLE_RATE)
-    if len(audio_16k) < 100:
-        return
-    transcriber = get_transcriber(model_size)
-    initial_prompt = first_prompt_ref[0] if first_prompt_ref else None
-    previous_context = last_context_ref[0] if last_context_ref else ""
-    # Do NOT clear first_prompt_ref: always pass initial_prompt for proper-name recognition
-
-    def _transcribe():
-        text = transcriber.transcribe_chunk(
-            audio_16k,
-            previous_context_text=previous_context if previous_context else None,
-            initial_prompt=initial_prompt,
-            language=language,
-        )
-        if text and DEFAULT_CONFIG.PUNCTUATION_RESTORE:
-            text = restore_punctuation(text)
-        if text:
-            text = cleanup_chunk_artifacts(text)
-        return text
-
-    loop = asyncio.get_event_loop()
-    try:
-        text = await loop.run_in_executor(None, _transcribe)
-    except Exception:
-        logger.exception("Transcription failed")
-        return
-    if debug_frames:
-        start_sec = chunk_index * chunk_duration
-        end_sec = (chunk_index + 1) * chunk_duration
-        try:
-            await ws.send_json({
-                "type": "debug_frame",
-                "time_range": [round(start_sec, 1), round(end_sec, 1)],
-                "raw": text or "",
-            })
-        except Exception:
-            pass
-    if text:
-        last_context_ref[0] = text
-        try:
-            await ws.send_json({"type": "transcript", "text": text})
-        except Exception:
-            pass
-
-
-async def file_chunk_worker(
+async def file_rolling_worker(
     ws: WebSocket,
     queue: asyncio.Queue,
     sample_rate: int,
     language: Optional[str],
     model_size: str,
-    last_context_ref: list,
     first_prompt_ref: list,
     trim_silence_file: bool,
-    chunk_duration: float = 6.0,
     debug_frames: bool = False,
 ) -> None:
-    """Process file chunks sequentially so transcription streams during playback."""
-    chunk_index = 0
+    """
+    Process file chunks with rolling buffer: append to buffer, transcribe last N sec
+    every ROLLING_INTERVAL_SEC. Produces overlapping windows like [0-3], [0-6], [0-9], [3-12].
+    """
+    cfg = DEFAULT_CONFIG
+    transcriber = get_transcriber(model_size)
+    buffer = WebAudioBuffer(
+        sample_rate=sample_rate,
+        max_chunk_duration=cfg.ROLLING_BUFFER_SEC,
+        max_buffer_seconds=cfg.ROLLING_BUFFER_SEC,
+    )
+    last_context = ""
+    last_sent = ""
+    last_process_sec = 0.0
+    min_samples = int(cfg.MIN_CHUNK_DURATION * TARGET_SAMPLE_RATE)
+
     while True:
         item = await queue.get()
         if item is None:
             break
         audio_arr, sr = item
-        await _process_file_chunk(
-            ws, audio_arr, sr, language, model_size,
-            last_context_ref, first_prompt_ref, trim_silence_file,
-            chunk_index=chunk_index,
-            chunk_duration=chunk_duration,
-            debug_frames=debug_frames,
+        buffer.append(audio_arr)
+        elapsed_sec = buffer.duration_seconds()
+
+        should_process = (
+            elapsed_sec - last_process_sec >= cfg.ROLLING_INTERVAL_SEC
+            or (last_process_sec == 0 and elapsed_sec >= cfg.MIN_CHUNK_DURATION)
         )
-        chunk_index += 1
+        if not should_process or elapsed_sec < cfg.MIN_CHUNK_DURATION:
+            queue.task_done()
+            continue
+
+        audio = buffer.get_rolling_audio(seconds=cfg.ROLLING_BUFFER_SEC)
+        if audio is None or len(audio) < min_samples:
+            queue.task_done()
+            continue
+
+        last_process_sec = elapsed_sec
+        audio_16k = resample_to_16k(audio, sample_rate)
+        if trim_silence_file:
+            audio_16k = trim_silence(audio_16k, TARGET_SAMPLE_RATE)
+        if len(audio_16k) < min_samples:
+            queue.task_done()
+            continue
+
+        initial_prompt = first_prompt_ref[0] if first_prompt_ref else None
+        previous_context = last_context or None
+
+        def _transcribe():
+            t = transcriber.transcribe_chunk(
+                audio_16k,
+                previous_context_text=previous_context,
+                initial_prompt=initial_prompt,
+                language=language,
+            )
+            if t and cfg.PUNCTUATION_RESTORE:
+                t = restore_punctuation(t)
+            if t:
+                t = cleanup_chunk_artifacts(t)
+            return t
+
+        loop = asyncio.get_event_loop()
+        try:
+            text = await loop.run_in_executor(None, _transcribe)
+        except Exception:
+            logger.exception("Transcription failed")
+            queue.task_done()
+            continue
+
+        if debug_frames:
+            window_start = max(0.0, elapsed_sec - cfg.ROLLING_BUFFER_SEC)
+            try:
+                await ws.send_json({
+                    "type": "debug_frame",
+                    "time_range": [round(window_start, 1), round(elapsed_sec, 1)],
+                    "raw": text or "",
+                })
+            except Exception:
+                pass
+
+        if text:
+            last_context = text
+            to_send = extract_new_suffix(last_sent, text)
+            if to_send:
+                last_sent = text
+                try:
+                    await ws.send_json({"type": "transcript", "text": to_send})
+                except Exception:
+                    pass
+
         queue.task_done()
 
 
@@ -354,11 +364,10 @@ async def websocket_endpoint(ws: WebSocket):
                     initial_prompt = build_initial_prompt(metadata)
                     first_prompt_ref = [initial_prompt] if initial_prompt else [None]
                     file_worker = asyncio.create_task(
-                        file_chunk_worker(
+                        file_rolling_worker(
                             ws, file_queue, sample_rate, language, model_size,
-                            last_context_ref, first_prompt_ref,
+                            first_prompt_ref,
                             DEFAULT_CONFIG.TRIM_SILENCE_FILE_CHUNKS,
-                            chunk_duration=DEFAULT_CONFIG.FILE_CHUNK_DURATION,
                             debug_frames=debug_frames,
                         )
                     )
@@ -371,7 +380,7 @@ async def websocket_endpoint(ws: WebSocket):
                     )
                 ready_payload = {"type": "ready", "sample_rate": sample_rate}
                 if source_type == "file":
-                    ready_payload["file_chunk_duration"] = DEFAULT_CONFIG.FILE_CHUNK_DURATION
+                    ready_payload["file_chunk_duration"] = DEFAULT_CONFIG.ROLLING_INTERVAL_SEC
                 await ws.send_json(ready_payload)
             elif "bytes" in msg:
                 data = msg["bytes"]
