@@ -6,6 +6,7 @@ import sys
 import time
 
 from pipeline.config import DEFAULT_CONFIG
+from pipeline.utils import resolve_device
 from pipeline.src.audio_stream import AudioStream
 from pipeline.src.transcriber import Transcriber
 
@@ -22,18 +23,7 @@ def run_pipeline(config=None) -> None:
     """
     cfg = config or DEFAULT_CONFIG
 
-    # Resolve device: MPS only on macOS with Apple Silicon
-    device = cfg.DEVICE
-    if device == "mps":
-        try:
-            import torch
-
-            if not torch.backends.mps.is_available():
-                logger.warning("MPS not available, falling back to CPU")
-                device = "cpu"
-        except ImportError:
-            logger.warning("PyTorch not installed, using CPU")
-            device = "cpu"
+    device = resolve_device(cfg.DEVICE)
 
     debug_dir = "data/raw_audio" if cfg.DEBUG_MODE else None
 

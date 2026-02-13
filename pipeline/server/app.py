@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from pipeline.config import DEFAULT_CONFIG
+from pipeline.utils import resolve_device
 from pipeline.server.audio_handler import (
     TARGET_SAMPLE_RATE,
     WebAudioBuffer,
@@ -44,19 +45,13 @@ def get_transcriber(model_size: str = "small") -> Transcriber:
     with _transcriber_lock:
         if model_size not in _transcribers:
             cfg = DEFAULT_CONFIG
-            device = cfg.DEVICE
-            if device == "mps":
-                try:
-                    import torch
-                    if not torch.backends.mps.is_available():
-                        device = "cpu"
-                except ImportError:
-                    device = "cpu"
+            device = resolve_device(cfg.DEVICE)
             _transcribers[model_size] = Transcriber(
                 model_size=model_size,
                 device=device,
                 compute_type=cfg.COMPUTE_TYPE,
                 context_window_size=cfg.CONTEXT_WINDOW_SIZE,
+                vad_filter=cfg.VAD_FILTER,
             )
         return _transcribers[model_size]
 
@@ -243,7 +238,10 @@ async def websocket_endpoint(ws: WebSocket):
                     task = asyncio.create_task(
                         process_audio_loop(ws, buffer, sample_rate, language, model_size)
                     )
-                await ws.send_json({"type": "ready", "sample_rate": sample_rate})
+                ready_payload = {"type": "ready", "sample_rate": sample_rate}
+                if source_type == "file":
+                    ready_payload["file_chunk_duration"] = DEFAULT_CONFIG.FILE_CHUNK_DURATION
+                await ws.send_json(ready_payload)
             elif "bytes" in msg:
                 data = msg["bytes"]
                 if len(data) < 2:

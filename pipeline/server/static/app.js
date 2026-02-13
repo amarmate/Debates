@@ -20,7 +20,6 @@
   let fileChunkInterval = null;
 
   const BUFFER_SIZE = 4096;
-  const FILE_CHUNK_DURATION = 2.0; // seconds per chunk for streaming
 
   function setStatus(msg) {
     statusEl.textContent = msg;
@@ -85,7 +84,7 @@
     return navigator.mediaDevices.getUserMedia({ audio: true });
   }
 
-  async function startFile(waitForReady) {
+  async function startFile(readyPromise) {
     const filename = fileSelect && fileSelect.value;
     if (!filename) {
       setStatus('Please select an audio file from the list.');
@@ -124,7 +123,8 @@
     cfg.source = 'file';
     ws.send(JSON.stringify(cfg));
 
-    await waitForReady;
+    const readyData = await readyPromise;
+    const fileChunkDuration = (readyData && readyData.file_chunk_duration) || 4.0;
 
     const playBuffer = audioContext.createBuffer(1, samples.length, sampleRate);
     playBuffer.copyToChannel(samples, 0);
@@ -148,7 +148,7 @@
       bufferSource = null;
     };
 
-    const chunkSamples = Math.floor(FILE_CHUNK_DURATION * sampleRate);
+    const chunkSamples = Math.floor(fileChunkDuration * sampleRate);
     let offset = 0;
 
     function sendNextChunk() {
@@ -160,7 +160,7 @@
       }
       offset = end;
       if (offset < int16.length) {
-        fileChunkInterval = setTimeout(sendNextChunk, FILE_CHUNK_DURATION * 1000);
+        fileChunkInterval = setTimeout(sendNextChunk, fileChunkDuration * 1000);
       }
     }
     setTimeout(sendNextChunk, 100);
@@ -254,7 +254,7 @@
     ws.onmessage = (ev) => {
       const data = JSON.parse(ev.data);
       if (data.type === 'ready' && resolveReady) {
-        resolveReady();
+        resolveReady(data);
         resolveReady = null;
       }
       origOnMessage(ev);

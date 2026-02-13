@@ -35,11 +35,13 @@ class Transcriber:
         device: str = "cpu",
         compute_type: str = "int8",
         context_window_size: int = 200,
+        vad_filter: bool = False,
     ):
         self._model_size = model_size
         self._device = device
         self._compute_type = compute_type
         self._context_window_size = context_window_size
+        self._vad_filter = vad_filter
         self._model = None
 
     def _ensure_model(self) -> None:
@@ -90,12 +92,11 @@ class Transcriber:
         if previous_context_text:
             initial_prompt = _truncate_context(previous_context_text, self._context_window_size)
 
-        # vad_filter removes silence to reduce hallucinations
         segments, _ = self._model.transcribe(
             audio,
             language=language,
             initial_prompt=initial_prompt if initial_prompt else None,
-            vad_filter=True,
+            vad_filter=self._vad_filter,
         )
 
         parts = []

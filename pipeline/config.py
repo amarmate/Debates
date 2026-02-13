@@ -16,13 +16,15 @@ class PipelineConfig:
     # Chunk boundaries
     MIN_CHUNK_DURATION: float = 1.0  # Minimum seconds of audio before transcribing
     MAX_CHUNK_DURATION: float = 10.0  # Maximum seconds before forcing a cut
+    FILE_CHUNK_DURATION: float = 4.0  # Seconds per chunk when playing file (configurable)
 
     # Context injection (sliding window)
     CONTEXT_WINDOW_SIZE: int = 200  # Characters from previous transcript to inject
 
     # faster-whisper model
+    VAD_FILTER: bool = False  # Silero VAD filter (saves resources when disabled)
     MODEL_SIZE: str = "small"  # tiny | base | small | medium | large-v2 | large-v3
-    DEVICE: Literal["cuda", "mps", "cpu"] = "cpu"
+    DEVICE: Literal["cuda", "mps", "cpu", "auto"] = "auto"
     COMPUTE_TYPE: Literal["float16", "int8"] = "int8"
 
     # Debug
