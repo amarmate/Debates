@@ -203,7 +203,7 @@ async def websocket_endpoint(ws: WebSocket):
     language: Optional[str] = None
     model_size = DEFAULT_CONFIG.MODEL_SIZE
     source_type = "mic"
-    last_context_ref: list = []
+    last_context_ref: list = [""]
     task: Optional[asyncio.Task] = None
     file_queue: Optional[asyncio.Queue] = None
     file_worker: Optional[asyncio.Task] = None

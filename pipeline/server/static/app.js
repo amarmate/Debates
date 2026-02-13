@@ -85,7 +85,7 @@
     return navigator.mediaDevices.getUserMedia({ audio: true });
   }
 
-  async function startFile() {
+  async function startFile(waitForReady) {
     const filename = fileSelect && fileSelect.value;
     if (!filename) {
       setStatus('Please select an audio file from the list.');
@@ -119,6 +119,13 @@
       int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
     }
 
+    const cfg = getConfig();
+    cfg.sample_rate = sampleRate;
+    cfg.source = 'file';
+    ws.send(JSON.stringify(cfg));
+
+    await waitForReady;
+
     const playBuffer = audioContext.createBuffer(1, samples.length, sampleRate);
     playBuffer.copyToChannel(samples, 0);
 
@@ -141,11 +148,6 @@
       bufferSource = null;
     };
 
-    const cfg = getConfig();
-    cfg.sample_rate = sampleRate;
-    cfg.source = 'file';
-    ws.send(JSON.stringify(cfg));
-
     const chunkSamples = Math.floor(FILE_CHUNK_DURATION * sampleRate);
     let offset = 0;
 
@@ -161,7 +163,7 @@
         fileChunkInterval = setTimeout(sendNextChunk, FILE_CHUNK_DURATION * 1000);
       }
     }
-    setTimeout(sendNextChunk, 100);  // give server time to process config
+    setTimeout(sendNextChunk, 100);
   }
 
   async function startMic() {
@@ -245,10 +247,24 @@
 
     await waitForOpen(ws);
     setStatus('Loading model…');
+
+    let resolveReady;
+    const readyPromise = new Promise((r) => { resolveReady = r; });
+    const origOnMessage = ws.onmessage;
+    ws.onmessage = (ev) => {
+      const data = JSON.parse(ev.data);
+      if (data.type === 'ready' && resolveReady) {
+        resolveReady();
+        resolveReady = null;
+      }
+      origOnMessage(ev);
+    };
+
     if (src === 'file') {
-      await startFile();
+      await startFile(readyPromise);
     } else {
       await startMic();
+      await readyPromise;
     }
   }
 
