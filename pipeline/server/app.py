@@ -191,16 +191,19 @@ async def file_rolling_worker(
 
         if debug_frames:
             window_start = max(0.0, total_elapsed_sec - cfg.ROLLING_BUFFER_SEC)
+            raw_display = text or ""
+            if raw_display.strip() in ("", "..."):
+                raw_display = "(no speech / uncertain)"
             try:
                 await ws.send_json({
                     "type": "debug_frame",
                     "time_range": [round(window_start, 1), round(total_elapsed_sec, 1)],
-                    "raw": text or "",
+                    "raw": raw_display,
                 })
             except Exception:
                 pass
 
-        if text:
+        if text and text.strip() not in ("", "..."):
             last_context = text
             to_send = extract_new_suffix(last_sent, text)
             if to_send:
@@ -242,11 +245,14 @@ async def process_audio_loop(
             return
         window_start = max(0.0, elapsed - cfg.ROLLING_BUFFER_SEC)
         window_end = elapsed
+        raw_display = text or ""
+        if raw_display.strip() in ("", "..."):
+            raw_display = "(no speech / uncertain)"
         try:
             await ws.send_json({
                 "type": "debug_frame",
                 "time_range": [round(window_start, 1), round(window_end, 1)],
-                "raw": text or "",
+                "raw": raw_display,
             })
         except Exception:
             pass
@@ -294,7 +300,7 @@ async def process_audio_loop(
 
         await _send_debug_frame(elapsed, text)
 
-        if text:
+        if text and text.strip() not in ("", "..."):
             last_context = text
             to_send = extract_new_suffix(last_sent, text)
             if to_send:
