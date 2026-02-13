@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from pipeline.config import DEFAULT_CONFIG
+from pipeline.config import DEFAULT_CONFIG, config_to_dict, get_config, update_config
 from pipeline.debate_metadata import build_initial_prompt, lookup_debate_metadata
 from pipeline.punctuation_restore import cleanup_chunk_artifacts, restore_punctuation
 from pipeline.sentence_buffer import SentenceBuffer, merge_chunks
@@ -49,7 +49,7 @@ _transcriber_lock = threading.Lock()
 def get_transcriber(model_size: str = "small") -> Transcriber:
     with _transcriber_lock:
         if model_size not in _transcribers:
-            cfg = DEFAULT_CONFIG
+            cfg = get_config()
             device = resolve_device(cfg.DEVICE)
             compute_type = resolve_compute_type(cfg.COMPUTE_TYPE, device)
             _transcribers[model_size] = Transcriber(
@@ -69,6 +69,31 @@ def get_transcriber(model_size: str = "small") -> Transcriber:
 async def no_icon():
     """Avoid 404 for browser/monitor icon requests."""
     return Response(status_code=204)
+
+
+@app.get("/api/config")
+async def api_get_config():
+    """Return current pipeline config as JSON."""
+    return config_to_dict(get_config())
+
+
+@app.patch("/api/config")
+async def api_update_config(body: dict):
+    """Update config with provided fields. Returns updated config."""
+    from pipeline.config import PipelineConfig
+    valid = set(PipelineConfig.__dataclass_fields__)
+    filtered = {k: v for k, v in body.items() if k in valid}
+    if filtered:
+        update_config(**filtered)
+    return config_to_dict(get_config())
+
+
+@app.post("/api/config/reset")
+async def api_reset_config():
+    """Reset config to defaults. Returns updated config."""
+    from pipeline.config import PipelineConfig
+    update_config(**config_to_dict(DEFAULT_CONFIG))
+    return config_to_dict(get_config())
 
 
 @app.get("/api/audio/files")
@@ -116,7 +141,7 @@ async def file_rolling_worker(
     Process file chunks with rolling buffer: append to buffer, transcribe last N sec
     every ROLLING_INTERVAL_SEC. Produces overlapping windows like [0-3], [0-6], [0-9], [3-12].
     """
-    cfg = DEFAULT_CONFIG
+    cfg = get_config()
     transcriber = get_transcriber(model_size)
     buffer = WebAudioBuffer(
         sample_rate=sample_rate,
@@ -228,7 +253,7 @@ async def process_audio_loop(
     initial_prompt: Optional[str] = None,
     debug_frames: bool = False,
 ):
-    cfg = DEFAULT_CONFIG
+    cfg = get_config()
     transcriber = get_transcriber(model_size)
     last_context = ""
     full_transcript = ""
@@ -316,9 +341,9 @@ async def process_audio_loop(
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     buffer: Optional[WebAudioBuffer] = None
-    sample_rate = DEFAULT_CONFIG.SAMPLE_RATE
+    sample_rate = get_config().SAMPLE_RATE
     language: Optional[str] = None
-    model_size = DEFAULT_CONFIG.MODEL_SIZE
+    model_size = get_config().MODEL_SIZE
     source_type = "mic"
     debug_frames = False
     last_context_ref: list = [""]
@@ -337,19 +362,19 @@ async def websocket_endpoint(ws: WebSocket):
             if "text" in msg:
                 import json as _json
                 cfg = _json.loads(msg["text"])
-                sample_rate = int(cfg.get("sample_rate", DEFAULT_CONFIG.SAMPLE_RATE))
+                sample_rate = int(cfg.get("sample_rate", get_config().SAMPLE_RATE))
                 language = cfg.get("language") or None
-                model_size = cfg.get("model_size") or DEFAULT_CONFIG.MODEL_SIZE
+                model_size = cfg.get("model_size") or get_config().MODEL_SIZE
                 source_type = cfg.get("source") or "mic"
                 filename = cfg.get("filename") or None
                 debug_frames = bool(cfg.get("debug_frames", False))
                 buffer = WebAudioBuffer(
                     sample_rate=sample_rate,
-                    silence_threshold=DEFAULT_CONFIG.SILENCE_THRESHOLD,
-                    silence_duration_ms=DEFAULT_CONFIG.SILENCE_DURATION_MS,
-                    min_chunk_duration=DEFAULT_CONFIG.MIN_CHUNK_DURATION,
-                    max_chunk_duration=DEFAULT_CONFIG.MAX_CHUNK_DURATION,
-                    max_buffer_seconds=DEFAULT_CONFIG.ROLLING_BUFFER_SEC,
+                    silence_threshold=get_config().SILENCE_THRESHOLD,
+                    silence_duration_ms=get_config().SILENCE_DURATION_MS,
+                    min_chunk_duration=get_config().MIN_CHUNK_DURATION,
+                    max_chunk_duration=get_config().MAX_CHUNK_DURATION,
+                    max_buffer_seconds=get_config().ROLLING_BUFFER_SEC,
                 )
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, lambda: get_transcriber(model_size))
@@ -363,7 +388,7 @@ async def websocket_endpoint(ws: WebSocket):
                         file_rolling_worker(
                             ws, file_queue, sample_rate, language, model_size,
                             first_prompt_ref,
-                            DEFAULT_CONFIG.TRIM_SILENCE_FILE_CHUNKS,
+                            get_config().TRIM_SILENCE_FILE_CHUNKS,
                             debug_frames=debug_frames,
                         )
                     )
@@ -376,7 +401,7 @@ async def websocket_endpoint(ws: WebSocket):
                     )
                 ready_payload = {"type": "ready", "sample_rate": sample_rate}
                 if source_type == "file":
-                    ready_payload["file_chunk_duration"] = DEFAULT_CONFIG.ROLLING_INTERVAL_SEC
+                    ready_payload["file_chunk_duration"] = get_config().ROLLING_INTERVAL_SEC
                 await ws.send_json(ready_payload)
             elif "bytes" in msg:
                 data = msg["bytes"]
@@ -389,11 +414,11 @@ async def websocket_endpoint(ws: WebSocket):
                     if buffer is None:
                         buffer = WebAudioBuffer(
                             sample_rate=sample_rate,
-                            silence_threshold=DEFAULT_CONFIG.SILENCE_THRESHOLD,
-                            silence_duration_ms=DEFAULT_CONFIG.SILENCE_DURATION_MS,
-                            min_chunk_duration=DEFAULT_CONFIG.MIN_CHUNK_DURATION,
-                            max_chunk_duration=DEFAULT_CONFIG.MAX_CHUNK_DURATION,
-                            max_buffer_seconds=DEFAULT_CONFIG.ROLLING_BUFFER_SEC,
+                            silence_threshold=get_config().SILENCE_THRESHOLD,
+                            silence_duration_ms=get_config().SILENCE_DURATION_MS,
+                            min_chunk_duration=get_config().MIN_CHUNK_DURATION,
+                            max_chunk_duration=get_config().MAX_CHUNK_DURATION,
+                            max_buffer_seconds=get_config().ROLLING_BUFFER_SEC,
                         )
                         task = asyncio.create_task(
                             process_audio_loop(

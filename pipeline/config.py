@@ -1,8 +1,8 @@
 """
 Configuration for the Speech-to-Fact real-time transcription pipeline.
 """
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import asdict, dataclass
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -50,3 +50,31 @@ class PipelineConfig:
 
 
 DEFAULT_CONFIG = PipelineConfig()
+
+# Runtime config (mutable) - used by the web app; starts as default
+_runtime_config = PipelineConfig()
+
+
+def config_to_dict(cfg: PipelineConfig) -> dict[str, Any]:
+    """Export config to a JSON-serializable dict."""
+    return asdict(cfg)
+
+
+def config_from_dict(d: dict[str, Any]) -> PipelineConfig:
+    """Build config from dict; unknown keys are ignored."""
+    valid = {f.name for f in PipelineConfig.__dataclass_fields__.values()}
+    return PipelineConfig(**{k: v for k, v in d.items() if k in valid})
+
+
+def get_config() -> PipelineConfig:
+    """Return the current runtime config (used by the server)."""
+    return _runtime_config
+
+
+def update_config(**kwargs: Any) -> PipelineConfig:
+    """Update runtime config with given fields. Returns the new config."""
+    global _runtime_config
+    d = config_to_dict(_runtime_config)
+    d.update({k: v for k, v in kwargs.items() if k in d})
+    _runtime_config = config_from_dict(d)
+    return _runtime_config

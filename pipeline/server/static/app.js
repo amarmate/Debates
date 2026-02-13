@@ -366,4 +366,142 @@
     if (isListening) stop();
     else start();
   });
+
+  // Config page
+  const navTranscription = document.getElementById('navTranscription');
+  const navSettings = document.getElementById('navSettings');
+  const pageTranscription = document.getElementById('pageTranscription');
+  const pageSettings = document.getElementById('pageSettings');
+
+  const configFields = {
+    SILENCE_THRESHOLD: () => document.getElementById('cfgSilenceThreshold'),
+    SILENCE_DURATION_MS: () => document.getElementById('cfgSilenceDurationMs'),
+    MIN_CHUNK_DURATION: () => document.getElementById('cfgMinChunkDuration'),
+    MAX_CHUNK_DURATION: () => document.getElementById('cfgMaxChunkDuration'),
+    ROLLING_INTERVAL_SEC: () => document.getElementById('cfgRollingIntervalSec'),
+    ROLLING_BUFFER_SEC: () => document.getElementById('cfgRollingBufferSec'),
+    FILE_CHUNK_DURATION: () => document.getElementById('cfgFileChunkDuration'),
+    DEVICE: () => document.getElementById('cfgDevice'),
+    COMPUTE_TYPE: () => document.getElementById('cfgComputeType'),
+    CONTEXT_WINDOW_SIZE: () => document.getElementById('cfgContextWindowSize'),
+    REPETITION_PENALTY: () => document.getElementById('cfgRepetitionPenalty'),
+    COMPRESSION_RATIO_THRESHOLD: () => document.getElementById('cfgCompressionRatioThreshold'),
+    VAD_FILTER: () => document.getElementById('cfgVadFilter'),
+    PUNCTUATION_RESTORE: () => document.getElementById('cfgPunctuationRestore'),
+    TRIM_SILENCE_FILE_CHUNKS: () => document.getElementById('cfgTrimSilenceFileChunks'),
+    DEBUG_MODE: () => document.getElementById('cfgDebugMode'),
+  };
+
+  const configDefaults = {
+    SILENCE_THRESHOLD: 0.01,
+    SILENCE_DURATION_MS: 500,
+    MIN_CHUNK_DURATION: 1,
+    MAX_CHUNK_DURATION: 10,
+    ROLLING_INTERVAL_SEC: 2,
+    ROLLING_BUFFER_SEC: 14,
+    FILE_CHUNK_DURATION: 6,
+    DEVICE: 'auto',
+    COMPUTE_TYPE: 'auto',
+    CONTEXT_WINDOW_SIZE: 450,
+    REPETITION_PENALTY: 1.1,
+    COMPRESSION_RATIO_THRESHOLD: 3,
+    VAD_FILTER: false,
+    PUNCTUATION_RESTORE: true,
+    TRIM_SILENCE_FILE_CHUNKS: false,
+    DEBUG_MODE: false,
+  };
+
+  function showPage(page) {
+    if (page === 'transcription') {
+      pageTranscription.classList.add('active');
+      pageSettings.classList.remove('active');
+      navTranscription.classList.add('active');
+      navSettings.classList.remove('active');
+    } else {
+      pageTranscription.classList.remove('active');
+      pageSettings.classList.add('active');
+      navTranscription.classList.remove('active');
+      navSettings.classList.add('active');
+      loadConfig();
+    }
+  }
+
+  async function loadConfig() {
+    try {
+      const resp = await fetch('/api/config');
+      const cfg = await resp.json();
+      for (const [key, elFn] of Object.entries(configFields)) {
+        const el = elFn();
+        if (!el || !(key in cfg)) continue;
+        const v = cfg[key];
+        if (el.type === 'checkbox') el.checked = !!v;
+        else if (el.tagName === 'SELECT') el.value = String(v);
+        else el.value = v;
+      }
+    } catch (e) {
+      const statusEl = document.getElementById('configStatus');
+      if (statusEl) statusEl.textContent = 'Failed to load config';
+    }
+  }
+
+  async function saveConfig() {
+    const statusEl = document.getElementById('configStatus');
+    const cfg = {};
+    for (const [key, elFn] of Object.entries(configFields)) {
+      const el = elFn();
+      if (!el) continue;
+      if (el.type === 'checkbox') cfg[key] = el.checked;
+      else if (el.tagName === 'SELECT') cfg[key] = el.value;
+      else cfg[key] = el.type === 'number' ? parseFloat(el.value) || 0 : el.value;
+    }
+    try {
+      const resp = await fetch('/api/config', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfg),
+      });
+      if (resp.ok) {
+        statusEl.textContent = 'Saved.';
+        setTimeout(() => { statusEl.textContent = ''; }, 2000);
+      } else statusEl.textContent = 'Save failed.';
+    } catch (e) {
+      statusEl.textContent = 'Save failed: ' + e.message;
+    }
+  }
+
+  function applyConfigToForm(cfg) {
+    for (const [key, elFn] of Object.entries(configFields)) {
+      const el = elFn();
+      if (!el) continue;
+      const v = key in cfg ? cfg[key] : configDefaults[key];
+      if (el.type === 'checkbox') el.checked = !!v;
+      else if (el.tagName === 'SELECT') el.value = String(v);
+      else el.value = v;
+    }
+  }
+
+  navTranscription.addEventListener('click', (e) => {
+    e.preventDefault();
+    showPage('transcription');
+  });
+  navSettings.addEventListener('click', (e) => {
+    e.preventDefault();
+    showPage('settings');
+  });
+
+  document.getElementById('configSaveBtn').addEventListener('click', saveConfig);
+  document.getElementById('configResetBtn').addEventListener('click', async () => {
+    const statusEl = document.getElementById('configStatus');
+    try {
+      const resp = await fetch('/api/config/reset', { method: 'POST' });
+      const cfg = resp.ok ? await resp.json() : null;
+      if (cfg) {
+        applyConfigToForm(cfg);
+        statusEl.textContent = 'Reset to defaults.';
+      } else statusEl.textContent = 'Reset failed.';
+      setTimeout(() => { statusEl.textContent = ''; }, 2000);
+    } catch (e) {
+      statusEl.textContent = 'Reset failed: ' + e.message;
+    }
+  });
 })();

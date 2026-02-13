@@ -228,11 +228,82 @@
       color: var(--text);
     }
     .sentence-item:last-child { border-bottom: none; }
+    .nav-tabs {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-tabs a {
+      padding: 0.5rem 1rem;
+      color: var(--muted);
+      text-decoration: none;
+      font-weight: 600;
+      border-radius: 0.5rem 0.5rem 0 0;
+    }
+    .nav-tabs a:hover { color: var(--text); }
+    .nav-tabs a.active {
+      color: var(--accent);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-bottom-color: var(--surface);
+      margin-bottom: -1px;
+    }
+    .page { display: none; }
+    .page.active { display: block; }
+    .config-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+    }
+    .config-section h3 {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin: 0 0 1rem;
+    }
+    .config-grid {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    }
+    .config-item {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    .config-item label {
+      font-size: 0.8125rem;
+      color: var(--muted);
+    }
+    .config-item input, .config-item select {
+      font-family: inherit;
+      font-size: 0.9375rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      color: var(--text);
+    }
+    .config-actions {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 1.5rem;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>Speech-to-Fact</h1>
+    <nav class="nav-tabs">
+      <a href="#" id="navTranscription" class="active">Transcription</a>
+      <a href="#" id="navSettings">Settings</a>
+    </nav>
+    <div id="pageTranscription" class="page active">
     <div class="controls">
       <label class="lang-label">Source</label>
       <select id="source" class="lang-select">
@@ -293,6 +364,120 @@
     <div id="debugWrapper" class="debug-wrapper">
       <h3>Raw frame transcriptions</h3>
       <div id="debugFramesList"></div>
+    </div>
+    </div>
+    <div id="pageSettings" class="page">
+      <div class="config-section">
+        <h3>VAD and chunks</h3>
+        <div class="config-grid">
+          <div class="config-item">
+            <label for="cfgSilenceThreshold">Silence threshold</label>
+            <input type="number" id="cfgSilenceThreshold" step="0.001" min="0" />
+          </div>
+          <div class="config-item">
+            <label for="cfgSilenceDurationMs">Silence duration (ms)</label>
+            <input type="number" id="cfgSilenceDurationMs" step="50" min="0" />
+          </div>
+          <div class="config-item">
+            <label for="cfgMinChunkDuration">Min chunk duration (s)</label>
+            <input type="number" id="cfgMinChunkDuration" step="0.1" min="0" />
+          </div>
+          <div class="config-item">
+            <label for="cfgMaxChunkDuration">Max chunk duration (s)</label>
+            <input type="number" id="cfgMaxChunkDuration" step="0.5" min="0" />
+          </div>
+        </div>
+      </div>
+      <div class="config-section">
+        <h3>Rolling buffer</h3>
+        <div class="config-grid">
+          <div class="config-item">
+            <label for="cfgRollingIntervalSec">Rolling interval (s)</label>
+            <input type="number" id="cfgRollingIntervalSec" step="0.5" min="0" />
+          </div>
+          <div class="config-item">
+            <label for="cfgRollingBufferSec">Rolling buffer (s)</label>
+            <input type="number" id="cfgRollingBufferSec" step="1" min="0" />
+          </div>
+          <div class="config-item">
+            <label for="cfgFileChunkDuration">File chunk duration (s)</label>
+            <input type="number" id="cfgFileChunkDuration" step="0.5" min="0" />
+          </div>
+        </div>
+      </div>
+      <div class="config-section">
+        <h3>Whisper model</h3>
+        <div class="config-grid">
+          <div class="config-item">
+            <label for="cfgDevice">Device</label>
+            <select id="cfgDevice">
+              <option value="auto">Auto</option>
+              <option value="cuda">CUDA</option>
+              <option value="cpu">CPU</option>
+              <option value="mps">MPS</option>
+            </select>
+          </div>
+          <div class="config-item">
+            <label for="cfgComputeType">Compute type</label>
+            <select id="cfgComputeType">
+              <option value="auto">Auto</option>
+              <option value="float16">Float16</option>
+              <option value="int8">Int8</option>
+            </select>
+          </div>
+          <div class="config-item">
+            <label for="cfgContextWindowSize">Context window (chars)</label>
+            <input type="number" id="cfgContextWindowSize" min="0" />
+          </div>
+        </div>
+      </div>
+      <div class="config-section">
+        <h3>Whisper tuning</h3>
+        <div class="config-grid">
+          <div class="config-item">
+            <label for="cfgRepetitionPenalty">Repetition penalty</label>
+            <input type="number" id="cfgRepetitionPenalty" step="0.1" min="1" />
+          </div>
+          <div class="config-item">
+            <label for="cfgCompressionRatioThreshold">Compression ratio threshold</label>
+            <input type="number" id="cfgCompressionRatioThreshold" step="0.1" min="0" />
+          </div>
+        </div>
+      </div>
+      <div class="config-section">
+        <h3>Features</h3>
+        <div class="config-grid">
+          <div class="config-item">
+            <label class="checkbox-wrap">
+              <input type="checkbox" id="cfgVadFilter" />
+              <span>VAD filter</span>
+            </label>
+          </div>
+          <div class="config-item">
+            <label class="checkbox-wrap">
+              <input type="checkbox" id="cfgPunctuationRestore" />
+              <span>Punctuation restore</span>
+            </label>
+          </div>
+          <div class="config-item">
+            <label class="checkbox-wrap">
+              <input type="checkbox" id="cfgTrimSilenceFileChunks" />
+              <span>Trim silence (file)</span>
+            </label>
+          </div>
+          <div class="config-item">
+            <label class="checkbox-wrap">
+              <input type="checkbox" id="cfgDebugMode" />
+              <span>Debug mode</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="config-actions">
+        <button type="button" id="configSaveBtn" style="background: var(--accent); color: var(--bg);">Save</button>
+        <button type="button" id="configResetBtn">Reset to defaults</button>
+        <span id="configStatus" class="status"></span>
+      </div>
     </div>
   </div>
   <script src="/static/app.js"></script>
