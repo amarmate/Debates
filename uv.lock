@@ -1603,6 +1603,8 @@ dependencies = [
 pipeline = [
     { name = "faster-whisper", version = "1.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "faster-whisper", version = "1.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
+    { name = "nltk", version = "3.9.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
+    { name = "nltk", version = "3.9.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
     { name = "sounddevice" },
 ]
 server = [
@@ -1621,6 +1623,7 @@ requires-dist = [
     { name = "faster-whisper", marker = "extra == 'pipeline'", specifier = ">=1.0.0" },
     { name = "jiwer", specifier = ">=3.0.0" },
     { name = "librosa", specifier = ">=0.10.0" },
+    { name = "nltk", marker = "extra == 'pipeline'", specifier = ">=3.8.0" },
     { name = "openai-whisper", specifier = ">=20231117" },
     { name = "playwright", specifier = ">=1.40.0" },
     { name = "pyannote-audio", specifier = ">=3.1.0" },

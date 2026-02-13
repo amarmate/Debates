@@ -200,6 +200,34 @@
       white-space: pre-wrap;
       word-wrap: break-word;
     }
+    .sentences-wrapper {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 1.25rem;
+      margin-top: 1rem;
+      max-height: 280px;
+      overflow-y: auto;
+    }
+    .sentences-wrapper h3 {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin: 0 0 1rem;
+    }
+    .sentences-list {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9375rem;
+      line-height: 1.6;
+    }
+    .sentence-item {
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+    }
+    .sentence-item:last-child { border-bottom: none; }
   </style>
 </head>
 <body>
@@ -257,6 +285,10 @@
     <div class="transcript-wrapper">
       <h3>Transcript</h3>
       <div id="transcript" class="empty">Transcription will appear here as you speak…</div>
+    </div>
+    <div class="sentences-wrapper">
+      <h3>Sentences (for fact-checking)</h3>
+      <div id="sentencesList" class="sentences-list"></div>
     </div>
     <div id="debugWrapper" class="debug-wrapper">
       <h3>Raw frame transcriptions</h3>

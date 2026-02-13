@@ -2,6 +2,7 @@
   const toggleBtn = document.getElementById('toggleBtn');
   const statusEl = document.getElementById('status');
   const transcriptEl = document.getElementById('transcript');
+  const sentencesList = document.getElementById('sentencesList');
   const debugWrapper = document.getElementById('debugWrapper');
   const debugFramesList = document.getElementById('debugFramesList');
   const canvas = document.getElementById('canvas');
@@ -31,6 +32,15 @@
     transcriptEl.classList.remove('empty');
     const current = transcriptEl.textContent;
     transcriptEl.textContent = current === 'Transcription will appear here as you speak…' ? text : current + ' ' + text;
+  }
+
+  function appendSentence(text) {
+    if (!sentencesList || !text) return;
+    const entry = document.createElement('div');
+    entry.className = 'sentence-item';
+    entry.textContent = text;
+    sentencesList.appendChild(entry);
+    sentencesList.parentElement.scrollTop = sentencesList.parentElement.scrollHeight;
   }
 
   function appendDebugFrame(timeRange, raw) {
@@ -240,6 +250,7 @@
 
     transcriptEl.textContent = 'Transcription will appear here as you speak…';
     transcriptEl.classList.add('empty');
+    if (sentencesList) sentencesList.innerHTML = '';
     if (debugFramesList) debugFramesList.innerHTML = '';
     if (debugWrapper) debugWrapper.classList.remove('visible');
 
@@ -257,6 +268,8 @@
         toggleBtn.classList.add('listening');
       } else if (data.type === 'transcript' && data.text) {
         appendTranscript(data.text);
+      } else if (data.type === 'sentence' && data.text) {
+        appendSentence(data.text);
       } else if (data.type === 'debug_frame' && data.time_range) {
         appendDebugFrame(data.time_range, data.raw);
       }

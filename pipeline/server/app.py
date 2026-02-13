@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pipeline.config import DEFAULT_CONFIG
 from pipeline.debate_metadata import build_initial_prompt, lookup_debate_metadata
 from pipeline.punctuation_restore import cleanup_chunk_artifacts, restore_punctuation
+from pipeline.sentence_buffer import SentenceBuffer, extract_new_suffix
 from pipeline.utils import resolve_compute_type, resolve_device
 from pipeline.server.audio_handler import (
     TARGET_SAMPLE_RATE,
@@ -27,32 +28,6 @@ from pipeline.server.audio_handler import (
 from pipeline.src.transcriber import Transcriber
 
 logger = logging.getLogger(__name__)
-
-
-def extract_new_suffix(last_sent: str, text_new: str) -> str:
-    """
-    Extract only the new portion of transcript to avoid duplicate output.
-    For rolling buffer: Whisper returns full transcript per window; windows overlap.
-    Find overlap at boundary (end of last_sent matches start of text_new) and return remainder.
-    """
-    if not last_sent:
-        return text_new.strip()
-    text_new = text_new.strip()
-    if not text_new:
-        return ""
-    # Cumulative case: new text extends last_sent
-    if text_new.startswith(last_sent) and len(text_new) > len(last_sent):
-        return text_new[len(last_sent) :].lstrip()
-    last_stripped = last_sent.rstrip()
-    if text_new.startswith(last_stripped) and len(text_new) > len(last_stripped):
-        return text_new[len(last_stripped) :].lstrip()
-    # Overlapping windows: find longest overlap at boundary
-    max_overlap = min(len(last_sent), len(text_new))
-    for i in range(max_overlap, 0, -1):
-        if last_sent[-i:] == text_new[:i]:
-            suffix = text_new[i:].strip()
-            return suffix if suffix else text_new
-    return text_new
 
 
 app = FastAPI(title="Speech-to-Fact")
@@ -153,10 +128,16 @@ async def file_rolling_worker(
     last_process_sec = 0.0
     total_elapsed_sec = 0.0
     min_samples = int(cfg.MIN_CHUNK_DURATION * TARGET_SAMPLE_RATE)
+    sentence_buffer = SentenceBuffer(language=language)
 
     while True:
         item = await queue.get()
         if item is None:
+            for sentence in sentence_buffer.flush():
+                try:
+                    await ws.send_json({"type": "sentence", "text": sentence})
+                except Exception:
+                    pass
             break
         audio_arr, sr = item
         buffer.append(audio_arr)
@@ -228,6 +209,11 @@ async def file_rolling_worker(
                     await ws.send_json({"type": "transcript", "text": to_send})
                 except Exception:
                     pass
+                for sentence in sentence_buffer.append(to_send):
+                    try:
+                        await ws.send_json({"type": "sentence", "text": sentence})
+                    except Exception:
+                        pass
 
         queue.task_done()
 
@@ -249,6 +235,7 @@ async def process_audio_loop(
     session_start = time.monotonic()
     poll_interval = 0.05
     min_samples = int(cfg.MIN_CHUNK_DURATION * TARGET_SAMPLE_RATE)
+    sentence_buffer = SentenceBuffer(language=language)
 
     async def _send_debug_frame(elapsed: float, text: str) -> None:
         if not debug_frames:
@@ -316,6 +303,11 @@ async def process_audio_loop(
                     await ws.send_json({"type": "transcript", "text": to_send})
                 except Exception:
                     break
+                for sentence in sentence_buffer.append(to_send):
+                    try:
+                        await ws.send_json({"type": "sentence", "text": sentence})
+                    except Exception:
+                        break
 
 
 @app.websocket("/ws")
