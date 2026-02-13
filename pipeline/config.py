@@ -19,8 +19,8 @@ class PipelineConfig:
     FILE_CHUNK_DURATION: float = 6.0  # Seconds per chunk when playing file (configurable)
 
     # Rolling buffer for low-latency live streaming (sub-10s)
-    ROLLING_INTERVAL_SEC: float = 3.0  # Process every N seconds
-    ROLLING_BUFFER_SEC: float = 12.0  # Keep last N seconds of audio for context
+    ROLLING_INTERVAL_SEC: float = 2.0  # Process every N seconds
+    ROLLING_BUFFER_SEC: float = 14.0  # Keep last N seconds of audio for context
 
     # Context injection (sliding window)
     CONTEXT_WINDOW_SIZE: int = 450  # Characters from previous transcript to inject

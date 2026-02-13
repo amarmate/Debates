@@ -140,7 +140,9 @@ def main() -> int:
     logger.info("Reconstructed full text: %d characters", len(full_text))
 
     sentences = segment_sentences(full_text, args.language)
-    logger.info("Segmented into %d sentences", len(sentences))
+    seen: set[str] = set()
+    sentences = [s for s in sentences if s not in seen and not seen.add(s)]
+    logger.info("Segmented into %d sentences (after dedup)", len(sentences))
 
     export_csv(sentences, args.output)
     return 0

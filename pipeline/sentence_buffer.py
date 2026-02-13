@@ -2,6 +2,7 @@
 Shared deduplication and sentence segmentation logic for live and batch processing.
 """
 import re
+from collections import deque
 from typing import Iterator
 
 import nltk
@@ -59,10 +60,19 @@ def _nltk_language(lang: str | None) -> str:
 
 
 def _is_valid_sentence(s: str) -> bool:
-    """Filter out very short or punctuation-only fragments."""
-    if len(s) < 3:
+    """
+    Filter out fragments that are not complete sentences:
+    - Very short or punctuation-only
+    - Contain ellipsis (...) indicating truncation
+    - Do not end with sentence-ending punctuation
+    """
+    if len(s) < 5:
         return False
     if re.match(r"^[\s.,;:!?\-]+$", s):
+        return False
+    if "..." in s:
+        return False
+    if not re.search(r"[.!?]$", s.strip()):
         return False
     return True
 
@@ -81,15 +91,19 @@ class SentenceBuffer:
     """
     Accumulates deduplicated text fragments and yields complete sentences as they become available.
     Used for live streaming: on each append, tokenize buffer and emit all but last (last may be incomplete).
+    Filters incomplete fragments and deduplicates.
     """
 
-    def __init__(self, language: str | None = None) -> None:
+    def __init__(self, language: str | None = None, dedup_size: int = 15) -> None:
         self._language = _nltk_language(language) if language else "portuguese"
         self._buffer = ""
+        self._dedup_size = dedup_size
+        self._recent: deque[str] = deque(maxlen=dedup_size)
 
     def append(self, fragment: str) -> list[str]:
         """
         Append a new deduplicated text fragment. Returns list of newly complete sentences.
+        Filters incomplete fragments and skips duplicates.
         """
         fragment = fragment.strip()
         if not fragment:
@@ -101,11 +115,15 @@ class SentenceBuffer:
         if not raw:
             return []
 
-        # All but last are complete; last may be incomplete (no trailing punctuation yet)
-        complete = [s.strip() for s in raw[:-1] if _is_valid_sentence(s.strip())]
+        valid = [s.strip() for s in raw[:-1] if _is_valid_sentence(s.strip())]
         self._buffer = raw[-1].strip()
 
-        return complete
+        result: list[str] = []
+        for s in valid:
+            if s not in self._recent:
+                result.append(s)
+                self._recent.append(s)
+        return result
 
     def flush(self) -> list[str]:
         """
@@ -113,9 +131,15 @@ class SentenceBuffer:
         """
         if not self._buffer.strip():
             return []
-        sentences = [s.strip() for s in nltk.sent_tokenize(self._buffer, language=self._language) if _is_valid_sentence(s.strip())]
+        raw = nltk.sent_tokenize(self._buffer, language=self._language)
         self._buffer = ""
-        return sentences
+        result: list[str] = []
+        for s in raw:
+            s = s.strip()
+            if _is_valid_sentence(s) and s not in self._recent:
+                result.append(s)
+                self._recent.append(s)
+        return result
 
     def iter_sentences(self, fragments: Iterator[str]) -> Iterator[str]:
         """
