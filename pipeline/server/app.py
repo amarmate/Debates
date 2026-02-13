@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from pipeline.config import DEFAULT_CONFIG
 from pipeline.debate_metadata import build_initial_prompt, lookup_debate_metadata
-from pipeline.punctuation_restore import restore_punctuation
+from pipeline.punctuation_restore import cleanup_chunk_artifacts, restore_punctuation
 from pipeline.utils import resolve_compute_type, resolve_device
 from pipeline.server.audio_handler import (
     TARGET_SAMPLE_RATE,
@@ -131,6 +131,8 @@ async def _process_file_chunk(
         )
         if text and DEFAULT_CONFIG.PUNCTUATION_RESTORE:
             text = restore_punctuation(text)
+        if text:
+            text = cleanup_chunk_artifacts(text)
         return text
 
     loop = asyncio.get_event_loop()
@@ -207,6 +209,8 @@ async def process_audio_loop(
             )
             if t and DEFAULT_CONFIG.PUNCTUATION_RESTORE:
                 t = restore_punctuation(t)
+            if t:
+                t = cleanup_chunk_artifacts(t)
             return t
 
         try:

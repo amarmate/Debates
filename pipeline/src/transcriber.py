@@ -95,10 +95,25 @@ class Transcriber:
         self._ensure_model()
 
         effective_prompt = ""
+        prompt_source = ""
         if previous_context_text:
             effective_prompt = _truncate_context(previous_context_text, self._context_window_size)
+            prompt_source = "previous_context"
         elif initial_prompt:
             effective_prompt = initial_prompt
+            prompt_source = "initial_prompt"
+
+        if effective_prompt:
+            logger.info(
+                "Prompt [%s]: %s",
+                prompt_source,
+                effective_prompt[:200] + ("..." if len(effective_prompt) > 200 else ""),
+            )
+        if prompt_source == "previous_context" and previous_context_text:
+            logger.info(
+                "Context (full): %s",
+                previous_context_text[:300] + ("..." if len(previous_context_text) > 300 else ""),
+            )
 
         segments, _ = self._model.transcribe(
             audio,
