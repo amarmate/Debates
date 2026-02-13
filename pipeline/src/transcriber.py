@@ -36,12 +36,16 @@ class Transcriber:
         compute_type: str = "int8",
         context_window_size: int = 200,
         vad_filter: bool = False,
+        repetition_penalty: float = 1.1,
+        compression_ratio_threshold: float = 2.6,
     ):
         self._model_size = model_size
         self._device = device
         self._compute_type = compute_type
         self._context_window_size = context_window_size
         self._vad_filter = vad_filter
+        self._repetition_penalty = repetition_penalty
+        self._compression_ratio_threshold = compression_ratio_threshold
         self._model = None
 
     def _ensure_model(self) -> None:
@@ -101,6 +105,8 @@ class Transcriber:
             language=language,
             initial_prompt=effective_prompt if effective_prompt else None,
             vad_filter=self._vad_filter,
+            repetition_penalty=self._repetition_penalty,
+            compression_ratio_threshold=self._compression_ratio_threshold,
         )
 
         parts = []

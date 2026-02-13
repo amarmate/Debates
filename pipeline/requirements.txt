@@ -1,5 +1,6 @@
 # Speech-to-Fact pipeline: real-time transcription with faster-whisper
 faster-whisper>=1.0.0
+respunct>=1.0.0  # punctuation restoration; may conflict with torch 2.x if both installed
 scipy>=1.10.0
 numpy>=1.24.0
 sounddevice>=0.4.6

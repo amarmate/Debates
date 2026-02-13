@@ -26,9 +26,14 @@ class PipelineConfig:
 
     # faster-whisper model
     VAD_FILTER: bool = False  # Silero VAD filter (saves resources when disabled)
+    REPETITION_PENALTY: float = 1.1  # Penalize repeated tokens
+    COMPRESSION_RATIO_THRESHOLD: float = 2.6  # Treat highly repetitive output as failed
     MODEL_SIZE: str = "small"  # tiny | base | small | medium | large-v2 | large-v3
     DEVICE: Literal["cuda", "mps", "cpu", "auto"] = "auto"
     COMPUTE_TYPE: Literal["float16", "int8", "auto"] = "auto"
+
+    # Punctuation restoration (respunct)
+    PUNCTUATION_RESTORE: bool = True  # Restore punctuation on transcribed chunks
 
     # Debug
     DEBUG_MODE: bool = False  # Save audio chunks to data/raw_audio/

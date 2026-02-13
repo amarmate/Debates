@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from pipeline.config import DEFAULT_CONFIG
 from pipeline.debate_metadata import build_initial_prompt, lookup_debate_metadata
+from pipeline.punctuation_restore import restore_punctuation
 from pipeline.utils import resolve_compute_type, resolve_device
 from pipeline.server.audio_handler import (
     TARGET_SAMPLE_RATE,
@@ -54,6 +55,8 @@ def get_transcriber(model_size: str = "small") -> Transcriber:
                 compute_type=compute_type,
                 context_window_size=cfg.CONTEXT_WINDOW_SIZE,
                 vad_filter=cfg.VAD_FILTER,
+                repetition_penalty=cfg.REPETITION_PENALTY,
+                compression_ratio_threshold=cfg.COMPRESSION_RATIO_THRESHOLD,
             )
         return _transcribers[model_size]
 
@@ -120,12 +123,15 @@ async def _process_file_chunk(
         first_prompt_ref[0] = None
 
     def _transcribe():
-        return transcriber.transcribe_chunk(
+        text = transcriber.transcribe_chunk(
             audio_16k,
             previous_context_text=previous_context if previous_context else None,
             initial_prompt=initial_prompt,
             language=language,
         )
+        if text and DEFAULT_CONFIG.PUNCTUATION_RESTORE:
+            text = restore_punctuation(text)
+        return text
 
     loop = asyncio.get_event_loop()
     try:
@@ -192,15 +198,19 @@ async def process_audio_loop(
 
         loop = asyncio.get_event_loop()
         lang = language
-        try:
-            text = await loop.run_in_executor(
-                None,
-                lambda: transcriber.transcribe_chunk(
-                    audio_16k,
-                    previous_context_text=last_context,
-                    language=lang,
-                ),
+
+        def _transcribe_mic():
+            t = transcriber.transcribe_chunk(
+                audio_16k,
+                previous_context_text=last_context,
+                language=lang,
             )
+            if t and DEFAULT_CONFIG.PUNCTUATION_RESTORE:
+                t = restore_punctuation(t)
+            return t
+
+        try:
+            text = await loop.run_in_executor(None, _transcribe_mic)
         except Exception:
             logger.exception("Transcription failed")
             continue
