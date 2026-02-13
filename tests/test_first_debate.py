@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Test script: download the first debate from debates_unified.csv and transcribe it.
-Runs the same pipeline as process_debates for a single debate.
+Runs the same pipeline as transcribe_all for a single debate.
 """
 
 import argparse
@@ -10,8 +10,8 @@ import logging
 import sys
 from pathlib import Path
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Add scripts/ to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from debate_downloader import get_debate_audio
 from download_all_debates import create_debate_title, create_debate_filename, DOWNLOAD_FOLDER

@@ -22,17 +22,17 @@ playwright install chromium
 
 **Download and transcribe all debates** (from `data/links/debates_unified.csv`):
 ```powershell
-uv run python process_debates.py
+uv run python transcribe_all.py
 ```
 
 **Download only:**
 ```powershell
-uv run python download_all_debates.py
+uv run python scripts/download_all_debates.py
 ```
 
 ## Audio Transcription with Speaker Diarization
 
-The `transcribe_audio.py` script transcribes audio files using OpenAI Whisper and automatically identifies speakers.
+The `scripts/transcribe_audio.py` script transcribes audio files using OpenAI Whisper and automatically identifies speakers.
 
 ### Setup for Speaker Diarization
 
@@ -60,36 +60,36 @@ The `transcribe_audio.py` script transcribes audio files using OpenAI Whisper an
 
 **Basic transcription with speaker diarization:**
 ```powershell
-python transcribe_audio.py audio_file.mp3
+python scripts/transcribe_audio.py audio_file.mp3
 ```
 
 **Specify ASR model** (Whisper size or Hugging Face path):
 ```powershell
 # Standard Whisper models (tiny, base, small, medium, large)
-python transcribe_audio.py audio_file.mp3 base
+python scripts/transcribe_audio.py audio_file.mp3 base
 
 # European Portuguese fine-tuned model (requires whisperx)
-python transcribe_audio.py audio_file.mp3 inesc-id/WhisperLv3-EP-X
+python scripts/transcribe_audio.py audio_file.mp3 inesc-id/WhisperLv3-EP-X
 ```
 
 **Specify number of speakers (if known):**
 ```powershell
-python transcribe_audio.py audio_file.mp3 base 2
+python scripts/transcribe_audio.py audio_file.mp3 base 2
 ```
 
 **Disable speaker diarization:**
 ```powershell
-python transcribe_audio.py audio_file.mp3 base --no-diarization
+python scripts/transcribe_audio.py audio_file.mp3 base --no-diarization
 ```
 
 **Disable overlap detection** (faster; segments where two speakers talk at once won't be flagged):
 ```powershell
-python transcribe_audio.py audio_file.mp3 --no-overlap-detection
+python scripts/transcribe_audio.py audio_file.mp3 --no-overlap-detection
 ```
 
 **Whisper anti-repetition options** (reduce repetitive hallucinations):
 ```powershell
-python transcribe_audio.py audio_file.mp3 --condition-on-previous-text false --compression-ratio-threshold 2.0
+python scripts/transcribe_audio.py audio_file.mp3 --condition-on-previous-text false --compression-ratio-threshold 2.0
 ```
 
 The output will be saved to `data/transcripts/{audio_stem}_{model}.txt` (e.g. `data/transcripts/2025-04-07_AD-vs-CDU_TVI_base.txt`) with speaker annotations in the format:
@@ -101,18 +101,42 @@ Text spoken by speaker 00...
 Text spoken by speaker 01...
 ```
 
+## Project Structure
+
+```
+Debates/
+├── transcribe_all.py  # Main entry: download + transcribe all debates (run from root)
+├── pipeline/         # Speech-to-Fact: real-time transcription
+│   ├── config.py     # Configuration (VAD, chunk bounds, model)
+│   ├── src/
+│   │   ├── audio_stream.py   # Mic capture, VAD, ring buffer
+│   │   ├── transcriber.py    # faster-whisper + context injection
+│   │   └── main.py          # Main loop
+│   └── requirements.txt
+├── scripts/          # Supporting modules and utility scripts
+│   ├── debate_downloader.py
+│   ├── download_all_debates.py
+│   ├── transcribe_audio.py
+│   ├── benchmark_transcription.py
+│   ├── cut_audio.py
+│   └── migrate_links_to_unified.py
+└── tests/            # Test scripts
+    ├── test_first_debate.py   # End-to-end: first debate
+    └── test_whisperx_load.py  # WhisperX model load test
+```
+
 ## Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/test_first_debate.py` | Download + transcribe first debate (end-to-end test) |
+| `transcribe_all.py` | **Main entry**: download + transcribe all debates |
 | `scripts/benchmark_transcription.py` | Compare transcription to reference, compute WER/CER |
 | `scripts/cut_audio.py` | Cut MP3 by start/end or duration |
 | `scripts/migrate_links_to_unified.py` | Regenerate `data/links/debates_unified.csv` from per-election CSVs |
 
 **Test first debate** (download + transcribe):
 ```powershell
-uv run python scripts/test_first_debate.py
+uv run python tests/test_first_debate.py
 ```
 
 **Benchmark** (add refs to `data/benchmark/refs/`):
@@ -134,6 +158,29 @@ Run the pipeline in a container (no local PyAV/FFmpeg dev libs or Chromium neede
 docker build -f docker/Dockerfile -t debates:latest .
 docker run --rm -e HF_TOKEN=<token> -v "$(pwd)/data:/app/data" debates:latest
 ```
+
+## Speech-to-Fact (Real-Time Transcription)
+
+Real-time, low-latency transcription with faster-whisper and sliding-window context injection.
+
+**Setup:**
+```powershell
+uv pip install -e ".[pipeline]"
+```
+
+**Terminal mode:**
+```powershell
+uv run python -m pipeline.src.main
+```
+
+**Web UI (Start button, visualizer, transcript):**
+```powershell
+uv pip install -e ".[pipeline,server]"
+uv run python -m pipeline.server
+```
+Then open http://localhost:8000 in your browser.
+
+See [pipeline/README.md](pipeline/README.md) for configuration.
 
 ## Dependencies
 

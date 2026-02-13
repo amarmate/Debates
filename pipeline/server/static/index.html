@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Speech-to-Fact</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --accent: #58a6ff;
+      --accent-hover: #79b8ff;
+      --success: #3fb950;
+      --danger: #f85149;
+      --text: #e6edf3;
+      --muted: #8b949e;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      font-family: 'Outfit', sans-serif;
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1.5rem;
+    }
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin: 0 0 1.5rem;
+      letter-spacing: -0.02em;
+    }
+    .container {
+      width: 100%;
+      max-width: 640px;
+    }
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+    .lang-label {
+      font-size: 0.875rem;
+      color: var(--muted);
+    }
+    .lang-select {
+      font-family: inherit;
+      font-size: 0.9375rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      color: var(--text);
+      cursor: pointer;
+    }
+    button {
+      font-family: inherit;
+      font-size: 1rem;
+      font-weight: 600;
+      padding: 0.75rem 1.5rem;
+      border: none;
+      border-radius: 0.5rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    #toggleBtn {
+      background: var(--accent);
+      color: var(--bg);
+    }
+    #toggleBtn:hover:not(:disabled) {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+    }
+    #toggleBtn.listening {
+      background: var(--success);
+      animation: pulse 1.5s ease infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.85; }
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .status {
+      font-size: 0.875rem;
+      color: var(--muted);
+      padding: 0.5rem 0;
+    }
+    .visualizer-wrapper {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+      min-height: 120px;
+    }
+    .visualizer-wrapper h3 {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin: 0 0 0.75rem;
+    }
+    #canvas {
+      width: 100%;
+      height: 80px;
+      display: block;
+      border-radius: 0.5rem;
+      background: rgba(0,0,0,0.2);
+    }
+    .transcript-wrapper {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 1.25rem;
+      min-height: 200px;
+    }
+    .transcript-wrapper h3 {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin: 0 0 1rem;
+    }
+    #transcript {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.125rem;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      min-height: 80px;
+      color: var(--text);
+    }
+    #transcript.empty {
+      color: var(--muted);
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Speech-to-Fact</h1>
+    <div class="controls">
+      <label for="modelSize" class="lang-label">Model</label>
+      <select id="modelSize" class="lang-select">
+        <option value="tiny">Tiny</option>
+        <option value="base">Base</option>
+        <option value="small" selected>Small</option>
+        <option value="medium">Medium</option>
+        <option value="turbo">Turbo (large-v3, fast)</option>
+        <option value="large-v2">Large v2</option>
+        <option value="large-v3">Large v3</option>
+      </select>
+      <label for="language" class="lang-label">Language</label>
+      <select id="language" class="lang-select">
+        <option value="">Auto-detect</option>
+        <option value="en">English</option>
+        <option value="pt">Portuguese</option>
+        <option value="es">Spanish</option>
+        <option value="fr">French</option>
+        <option value="de">German</option>
+        <option value="it">Italian</option>
+        <option value="nl">Dutch</option>
+        <option value="pl">Polish</option>
+        <option value="ru">Russian</option>
+        <option value="ja">Japanese</option>
+        <option value="zh">Chinese</option>
+      </select>
+      <button id="toggleBtn" type="button">Start talking</button>
+    </div>
+    <p class="status" id="status">Click Start to begin. Allow microphone access when prompted.</p>
+    <div class="visualizer-wrapper">
+      <h3>Live audio</h3>
+      <canvas id="canvas" width="608" height="80"></canvas>
+    </div>
+    <div class="transcript-wrapper">
+      <h3>Transcript</h3>
+      <div id="transcript" class="empty">Transcription will appear here as you speak…</div>
+    </div>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

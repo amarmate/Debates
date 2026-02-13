@@ -180,6 +180,17 @@ data/temp/*.mp3
 data/temp/*.m4a
 data/temp/*.wav
 
+# Speech-to-Fact pipeline
+data/raw_audio/
+*.wav
+*.mp3
+*.mp4
+
+# HuggingFace / model cache
+*.bin
+*.pt
+*.safetensors
+
 # PyPI configuration file
 .pypirc
 

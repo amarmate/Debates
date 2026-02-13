@@ -120,14 +120,29 @@ def check_already_downloaded(title, date_str=None, filename_base=None):
 
     return False
 
-def download_all_debates(csv_file=None, download_audio_only=True, audio_format="mp3"):
+def _model_name_for_path(model_name: str) -> str:
+    """Sanitize model name for use in transcript filenames (matches transcribe_audio)."""
+    return model_name.replace("/", "_").replace("\\", "_")
+
+
+def transcript_exists_for_debate(filename_base: str, model: str) -> bool:
+    """Return True if a transcript already exists for this debate with the given model."""
+    if not model:
+        return False
+    label = _model_name_for_path(model)
+    transcript_path = Path("data/transcripts") / f"{filename_base}_{label}.txt"
+    return transcript_path.exists()
+
+
+def download_all_debates(csv_file=None, download_audio_only=True, audio_format="mp3", model=None):
     """
     Download all debates from the CSV file
-    
+
     Args:
         csv_file: Path to CSV file (defaults to CSV_FILE global)
         download_audio_only: Whether to download audio only
         audio_format: Audio format for extraction
+        model: Optional ASR model name. When provided, skips download if transcript exists.
     """
     csv_file = csv_file or CSV_FILE
     csv_path = Path(csv_file)
@@ -173,6 +188,13 @@ def download_all_debates(csv_file=None, download_audio_only=True, audio_format="
         # Check if already downloaded
         if check_already_downloaded(title, date_str, filename_base):
             logger.info("⏭️  Already downloaded, skipping...")
+            skipped += 1
+            logger.info("")
+            continue
+
+        # Skip download if transcript already exists for this model
+        if transcript_exists_for_debate(filename_base, model):
+            logger.info("⏭️  Transcript already exists for this model, skipping download...")
             skipped += 1
             logger.info("")
             continue

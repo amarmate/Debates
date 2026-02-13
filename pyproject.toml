@@ -18,3 +18,17 @@ dependencies = [
     "jiwer>=3.0.0",
 ]
 
+[project.optional-dependencies]
+pipeline = [
+    "faster-whisper>=1.0.0",
+    "sounddevice>=0.4.6",
+]
+server = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.22.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["pipeline*"]
+exclude = ["data*", "scripts*", "tests*", "docker*"]
+

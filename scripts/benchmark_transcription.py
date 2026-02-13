@@ -48,9 +48,8 @@ def run_benchmark(
     enable_vad: bool = True,
 ) -> tuple[str, str, float, float]:
     """Transcribe audio, compare to reference, return (reference, hypothesis, wer, cer)."""
-    # Add project root to path so transcribe_audio can be imported
-    project_root = Path(__file__).resolve().parent.parent
-    sys.path.insert(0, str(project_root))
+    # scripts/ contains transcribe_audio; we're already in scripts/
+    pass
     from transcribe_audio import transcribe_audio
 
     ref_text = ref_path.read_text(encoding="utf-8")
