@@ -10,7 +10,7 @@ from typing import Optional
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from pipeline.config import DEFAULT_CONFIG
@@ -54,6 +54,13 @@ def get_transcriber(model_size: str = "small") -> Transcriber:
                 vad_filter=cfg.VAD_FILTER,
             )
         return _transcribers[model_size]
+
+
+@app.get("/favicon.ico")
+@app.get("/health.ico")
+async def no_icon():
+    """Avoid 404 for browser/monitor icon requests."""
+    return Response(status_code=204)
 
 
 @app.get("/api/audio/files")
