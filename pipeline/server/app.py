@@ -151,6 +151,7 @@ async def file_rolling_worker(
     last_context = ""
     last_sent = ""
     last_process_sec = 0.0
+    total_elapsed_sec = 0.0
     min_samples = int(cfg.MIN_CHUNK_DURATION * TARGET_SAMPLE_RATE)
 
     while True:
@@ -159,13 +160,14 @@ async def file_rolling_worker(
             break
         audio_arr, sr = item
         buffer.append(audio_arr)
-        elapsed_sec = buffer.duration_seconds()
+        chunk_duration = len(audio_arr) / sample_rate
+        total_elapsed_sec += chunk_duration
 
         should_process = (
-            elapsed_sec - last_process_sec >= cfg.ROLLING_INTERVAL_SEC
-            or (last_process_sec == 0 and elapsed_sec >= cfg.MIN_CHUNK_DURATION)
+            total_elapsed_sec - last_process_sec >= cfg.ROLLING_INTERVAL_SEC
+            or (last_process_sec == 0 and total_elapsed_sec >= cfg.MIN_CHUNK_DURATION)
         )
-        if not should_process or elapsed_sec < cfg.MIN_CHUNK_DURATION:
+        if not should_process or total_elapsed_sec < cfg.MIN_CHUNK_DURATION:
             queue.task_done()
             continue
 
@@ -174,7 +176,7 @@ async def file_rolling_worker(
             queue.task_done()
             continue
 
-        last_process_sec = elapsed_sec
+        last_process_sec = total_elapsed_sec
         audio_16k = resample_to_16k(audio, sample_rate)
         if trim_silence_file:
             audio_16k = trim_silence(audio_16k, TARGET_SAMPLE_RATE)
@@ -207,11 +209,11 @@ async def file_rolling_worker(
             continue
 
         if debug_frames:
-            window_start = max(0.0, elapsed_sec - cfg.ROLLING_BUFFER_SEC)
+            window_start = max(0.0, total_elapsed_sec - cfg.ROLLING_BUFFER_SEC)
             try:
                 await ws.send_json({
                     "type": "debug_frame",
-                    "time_range": [round(window_start, 1), round(elapsed_sec, 1)],
+                    "time_range": [round(window_start, 1), round(total_elapsed_sec, 1)],
                     "raw": text or "",
                 })
             except Exception:
