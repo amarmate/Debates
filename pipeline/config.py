@@ -31,9 +31,7 @@ class PipelineConfig:
     # faster-whisper model
     VAD_FILTER: bool = False  # Silero VAD filter (saves resources when disabled)
     REPETITION_PENALTY: float = 1.1  # Penalize repeated tokens
-    # When exceeded, Whisper returns "..." instead of text. Higher = more permissive (fewer "..." frames).
-    # Default 2.4 in faster-whisper; 3.0+ reduces spurious "..." on music/silence or repetitive chunks.
-    COMPRESSION_RATIO_THRESHOLD: float = 3.0  # Treat highly repetitive output as failed
+    COMPRESSION_RATIO_THRESHOLD: float = 2.6  # Treat highly repetitive output as failed
     MODEL_SIZE: str = "small"  # tiny | base | small | medium | large-v2 | large-v3
     DEVICE: Literal["cuda", "mps", "cpu", "auto"] = "auto"
     COMPUTE_TYPE: Literal["float16", "int8", "auto"] = "auto"

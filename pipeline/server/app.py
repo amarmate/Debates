@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pipeline.config import DEFAULT_CONFIG
 from pipeline.debate_metadata import build_initial_prompt, lookup_debate_metadata
 from pipeline.punctuation_restore import cleanup_chunk_artifacts, restore_punctuation
-from pipeline.sentence_buffer import SentenceBuffer, extract_new_suffix
+from pipeline.sentence_buffer import SentenceBuffer, merge_chunks
 from pipeline.utils import resolve_compute_type, resolve_device
 from pipeline.server.audio_handler import (
     TARGET_SAMPLE_RATE,
@@ -124,7 +124,7 @@ async def file_rolling_worker(
         max_buffer_seconds=cfg.ROLLING_BUFFER_SEC,
     )
     last_context = ""
-    last_sent = ""
+    full_transcript = ""
     last_process_sec = 0.0
     total_elapsed_sec = 0.0
     min_samples = int(cfg.MIN_CHUNK_DURATION * TARGET_SAMPLE_RATE)
@@ -191,23 +191,21 @@ async def file_rolling_worker(
 
         if debug_frames:
             window_start = max(0.0, total_elapsed_sec - cfg.ROLLING_BUFFER_SEC)
-            raw_display = text or ""
-            if raw_display.strip() in ("", "..."):
-                raw_display = "(no speech / uncertain)"
             try:
                 await ws.send_json({
                     "type": "debug_frame",
                     "time_range": [round(window_start, 1), round(total_elapsed_sec, 1)],
-                    "raw": raw_display,
+                    "raw": text or "",
                 })
             except Exception:
                 pass
 
-        if text and text.strip() not in ("", "..."):
+        if text:
             last_context = text
-            to_send = extract_new_suffix(last_sent, text)
+            prev_len = len(full_transcript)
+            full_transcript = merge_chunks(full_transcript, text)
+            to_send = full_transcript[prev_len:].strip()
             if to_send:
-                last_sent = text
                 try:
                     await ws.send_json({"type": "transcript", "text": to_send})
                 except Exception:
@@ -233,7 +231,7 @@ async def process_audio_loop(
     cfg = DEFAULT_CONFIG
     transcriber = get_transcriber(model_size)
     last_context = ""
-    last_sent = ""
+    full_transcript = ""
     last_process = 0.0
     session_start = time.monotonic()
     poll_interval = 0.05
@@ -245,14 +243,11 @@ async def process_audio_loop(
             return
         window_start = max(0.0, elapsed - cfg.ROLLING_BUFFER_SEC)
         window_end = elapsed
-        raw_display = text or ""
-        if raw_display.strip() in ("", "..."):
-            raw_display = "(no speech / uncertain)"
         try:
             await ws.send_json({
                 "type": "debug_frame",
                 "time_range": [round(window_start, 1), round(window_end, 1)],
-                "raw": raw_display,
+                "raw": text or "",
             })
         except Exception:
             pass
@@ -300,11 +295,12 @@ async def process_audio_loop(
 
         await _send_debug_frame(elapsed, text)
 
-        if text and text.strip() not in ("", "..."):
+        if text:
             last_context = text
-            to_send = extract_new_suffix(last_sent, text)
+            prev_len = len(full_transcript)
+            full_transcript = merge_chunks(full_transcript, text)
+            to_send = full_transcript[prev_len:].strip()
             if to_send:
-                last_sent = text
                 try:
                     await ws.send_json({"type": "transcript", "text": to_send})
                 except Exception:

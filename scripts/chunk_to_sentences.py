@@ -20,7 +20,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from pipeline.sentence_buffer import extract_new_suffix, segment_sentences
+from pipeline.sentence_buffer import merge_chunks, segment_sentences
 
 logger = logging.getLogger(__name__)
 
@@ -61,20 +61,18 @@ def parse_chunks(path: Path, fmt: str) -> list[str]:
     return chunks
 
 
-def reconstruct_full_text(chunks: list[str]) -> str:
+def reconstruct_full_text(
+    chunks: list[str],
+    search_window: int = 200,
+    min_overlap: int = 10,
+) -> str:
     """
-    Reconstruct full text from overlapping chunks using extract_new_suffix logic.
+    Reconstruct full text from overlapping chunks using difflib-based merge_chunks.
     """
-    accumulated: list[str] = []
-    last_sent = ""
-
+    full_text = ""
     for chunk in chunks:
-        new_part = extract_new_suffix(last_sent, chunk)
-        if new_part:
-            accumulated.append(new_part)
-            last_sent = chunk
-
-    return " ".join(accumulated)
+        full_text = merge_chunks(full_text, chunk, search_window, min_overlap)
+    return full_text
 
 
 def export_csv(sentences: list[str], path: Path) -> None:
@@ -120,6 +118,18 @@ def main() -> int:
         default="portuguese",
         help="Language for sentence tokenizer (e.g. portuguese, english)",
     )
+    parser.add_argument(
+        "--search-window",
+        type=int,
+        default=200,
+        help="Chars from end of accumulated text to compare for overlap (default: 200)",
+    )
+    parser.add_argument(
+        "--min-overlap",
+        type=int,
+        default=10,
+        help="Minimum overlap length to consider valid (default: 10)",
+    )
     args = parser.parse_args()
 
     if not args.input.exists():
@@ -136,7 +146,11 @@ def main() -> int:
         logger.error("No chunks found in input")
         return 1
 
-    full_text = reconstruct_full_text(chunks)
+    full_text = reconstruct_full_text(
+        chunks,
+        search_window=args.search_window,
+        min_overlap=args.min_overlap,
+    )
     logger.info("Reconstructed full text: %d characters", len(full_text))
 
     sentences = segment_sentences(full_text, args.language)
