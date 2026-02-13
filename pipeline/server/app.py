@@ -136,6 +136,9 @@ async def _process_file_chunk(
     last_context_ref: list,
     first_prompt_ref: list,
     trim_silence_file: bool,
+    chunk_index: int = 0,
+    chunk_duration: float = 6.0,
+    debug_frames: bool = False,
 ) -> None:
     """Transcribe one file chunk and send result."""
     audio_float = audio_int16.astype(np.float32) / 32768.0
@@ -168,6 +171,17 @@ async def _process_file_chunk(
     except Exception:
         logger.exception("Transcription failed")
         return
+    if debug_frames:
+        start_sec = chunk_index * chunk_duration
+        end_sec = (chunk_index + 1) * chunk_duration
+        try:
+            await ws.send_json({
+                "type": "debug_frame",
+                "time_range": [round(start_sec, 1), round(end_sec, 1)],
+                "raw": text or "",
+            })
+        except Exception:
+            pass
     if text:
         last_context_ref[0] = text
         try:
@@ -185,8 +199,11 @@ async def file_chunk_worker(
     last_context_ref: list,
     first_prompt_ref: list,
     trim_silence_file: bool,
+    chunk_duration: float = 6.0,
+    debug_frames: bool = False,
 ) -> None:
     """Process file chunks sequentially so transcription streams during playback."""
+    chunk_index = 0
     while True:
         item = await queue.get()
         if item is None:
@@ -195,7 +212,11 @@ async def file_chunk_worker(
         await _process_file_chunk(
             ws, audio_arr, sr, language, model_size,
             last_context_ref, first_prompt_ref, trim_silence_file,
+            chunk_index=chunk_index,
+            chunk_duration=chunk_duration,
+            debug_frames=debug_frames,
         )
+        chunk_index += 1
         queue.task_done()
 
 
@@ -206,14 +227,30 @@ async def process_audio_loop(
     language: Optional[str] = None,
     model_size: str = "small",
     initial_prompt: Optional[str] = None,
+    debug_frames: bool = False,
 ):
     cfg = DEFAULT_CONFIG
     transcriber = get_transcriber(model_size)
     last_context = ""
     last_sent = ""
     last_process = 0.0
+    session_start = time.monotonic()
     poll_interval = 0.05
     min_samples = int(cfg.MIN_CHUNK_DURATION * TARGET_SAMPLE_RATE)
+
+    async def _send_debug_frame(elapsed: float, text: str) -> None:
+        if not debug_frames:
+            return
+        window_start = max(0.0, elapsed - cfg.ROLLING_BUFFER_SEC)
+        window_end = elapsed
+        try:
+            await ws.send_json({
+                "type": "debug_frame",
+                "time_range": [round(window_start, 1), round(window_end, 1)],
+                "raw": text or "",
+            })
+        except Exception:
+            pass
 
     while True:
         await asyncio.sleep(poll_interval)
@@ -233,6 +270,7 @@ async def process_audio_loop(
             continue
 
         last_process = now
+        elapsed = now - session_start
         loop = asyncio.get_event_loop()
         lang = language
 
@@ -255,6 +293,8 @@ async def process_audio_loop(
             logger.exception("Transcription failed")
             continue
 
+        await _send_debug_frame(elapsed, text)
+
         if text:
             last_context = text
             to_send = extract_new_suffix(last_sent, text)
@@ -274,6 +314,7 @@ async def websocket_endpoint(ws: WebSocket):
     language: Optional[str] = None
     model_size = DEFAULT_CONFIG.MODEL_SIZE
     source_type = "mic"
+    debug_frames = False
     last_context_ref: list = [""]
     task: Optional[asyncio.Task] = None
     file_queue: Optional[asyncio.Queue] = None
@@ -295,6 +336,7 @@ async def websocket_endpoint(ws: WebSocket):
                 model_size = cfg.get("model_size") or DEFAULT_CONFIG.MODEL_SIZE
                 source_type = cfg.get("source") or "mic"
                 filename = cfg.get("filename") or None
+                debug_frames = bool(cfg.get("debug_frames", False))
                 buffer = WebAudioBuffer(
                     sample_rate=sample_rate,
                     silence_threshold=DEFAULT_CONFIG.SILENCE_THRESHOLD,
@@ -316,11 +358,16 @@ async def websocket_endpoint(ws: WebSocket):
                             ws, file_queue, sample_rate, language, model_size,
                             last_context_ref, first_prompt_ref,
                             DEFAULT_CONFIG.TRIM_SILENCE_FILE_CHUNKS,
+                            chunk_duration=DEFAULT_CONFIG.FILE_CHUNK_DURATION,
+                            debug_frames=debug_frames,
                         )
                     )
                 elif task is None:
                     task = asyncio.create_task(
-                        process_audio_loop(ws, buffer, sample_rate, language, model_size)
+                        process_audio_loop(
+                            ws, buffer, sample_rate, language, model_size,
+                            debug_frames=debug_frames,
+                        )
                     )
                 ready_payload = {"type": "ready", "sample_rate": sample_rate}
                 if source_type == "file":
@@ -344,7 +391,10 @@ async def websocket_endpoint(ws: WebSocket):
                             max_buffer_seconds=DEFAULT_CONFIG.ROLLING_BUFFER_SEC,
                         )
                         task = asyncio.create_task(
-                            process_audio_loop(ws, buffer, sample_rate, language, model_size)
+                            process_audio_loop(
+                                ws, buffer, sample_rate, language, model_size,
+                                debug_frames=debug_frames,
+                            )
                         )
                     buffer.append(arr)
     except WebSocketDisconnect:

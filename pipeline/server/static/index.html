@@ -155,6 +155,51 @@
       color: var(--muted);
       font-style: italic;
     }
+    .checkbox-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.875rem;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .checkbox-wrap input { cursor: pointer; }
+    .debug-wrapper {
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 1.25rem;
+      margin-top: 1rem;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .debug-wrapper.visible { display: block; }
+    .debug-wrapper h3 {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin: 0 0 1rem;
+    }
+    .debug-frame {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8125rem;
+      margin-bottom: 0.75rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .debug-frame:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+    .debug-frame-label {
+      color: var(--accent);
+      margin-bottom: 0.25rem;
+    }
+    .debug-frame-raw {
+      color: var(--text);
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
   </style>
 </head>
 <body>
@@ -182,6 +227,11 @@
         <option value="large-v2">Large v2</option>
         <option value="large-v3">Large v3</option>
       </select>
+      <label for="debugFrames" class="lang-label">Debug</label>
+      <label class="checkbox-wrap">
+        <input type="checkbox" id="debugFrames" />
+        <span>Show frame transcriptions</span>
+      </label>
       <label for="language" class="lang-label">Language</label>
       <select id="language" class="lang-select">
         <option value="">Auto-detect</option>
@@ -207,6 +257,10 @@
     <div class="transcript-wrapper">
       <h3>Transcript</h3>
       <div id="transcript" class="empty">Transcription will appear here as you speak…</div>
+    </div>
+    <div id="debugWrapper" class="debug-wrapper">
+      <h3>Raw frame transcriptions</h3>
+      <div id="debugFramesList"></div>
     </div>
   </div>
   <script src="/static/app.js"></script>

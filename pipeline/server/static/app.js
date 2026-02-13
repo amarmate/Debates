@@ -2,6 +2,8 @@
   const toggleBtn = document.getElementById('toggleBtn');
   const statusEl = document.getElementById('status');
   const transcriptEl = document.getElementById('transcript');
+  const debugWrapper = document.getElementById('debugWrapper');
+  const debugFramesList = document.getElementById('debugFramesList');
   const canvas = document.getElementById('canvas');
   const ctx = canvas.getContext('2d');
   const sourceSelect = document.getElementById('source');
@@ -29,6 +31,17 @@
     transcriptEl.classList.remove('empty');
     const current = transcriptEl.textContent;
     transcriptEl.textContent = current === 'Transcription will appear here as you speak…' ? text : current + ' ' + text;
+  }
+
+  function appendDebugFrame(timeRange, raw) {
+    if (!debugWrapper || !debugFramesList) return;
+    debugWrapper.classList.add('visible');
+    const entry = document.createElement('div');
+    entry.className = 'debug-frame';
+    const [start, end] = timeRange;
+    entry.innerHTML = '<div class="debug-frame-label">[' + start + ' - ' + end + ' sec]</div><div class="debug-frame-raw">' + (raw || '(empty)').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+    debugFramesList.appendChild(entry);
+    debugWrapper.scrollTop = debugWrapper.scrollHeight;
   }
 
   function drawVisualizer() {
@@ -74,9 +87,11 @@
   function getConfig() {
     const langSelect = document.getElementById('language');
     const modelSelect = document.getElementById('modelSize');
+    const debugCheck = document.getElementById('debugFrames');
     return {
       language: (langSelect && langSelect.value) ? langSelect.value : null,
       model_size: (modelSelect && modelSelect.value) ? modelSelect.value : 'small',
+      debug_frames: debugCheck ? debugCheck.checked : false,
     };
   }
 
@@ -225,6 +240,8 @@
 
     transcriptEl.textContent = 'Transcription will appear here as you speak…';
     transcriptEl.classList.add('empty');
+    if (debugFramesList) debugFramesList.innerHTML = '';
+    if (debugWrapper) debugWrapper.classList.remove('visible');
 
     const src = sourceSelect && sourceSelect.value;
     setStatus('Loading model…');
@@ -240,6 +257,8 @@
         toggleBtn.classList.add('listening');
       } else if (data.type === 'transcript' && data.text) {
         appendTranscript(data.text);
+      } else if (data.type === 'debug_frame' && data.time_range) {
+        appendDebugFrame(data.time_range, data.raw);
       }
     };
 
