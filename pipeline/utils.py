@@ -1,6 +1,13 @@
 """Pipeline utilities."""
 
 
+def resolve_compute_type(compute_type: str, device: str) -> str:
+    """Resolve compute type: if 'auto', use float16 for GPU (cuda/mps) and int8 for CPU."""
+    if compute_type == "auto":
+        return "float16" if device in ("cuda", "mps") else "int8"
+    return compute_type
+
+
 def resolve_device(device: str) -> str:
     """Resolve device: cuda if available, else mps, else cpu."""
     if device == "auto":

@@ -71,6 +71,7 @@ class Transcriber:
         self,
         audio: np.ndarray,
         previous_context_text: Optional[str] = None,
+        initial_prompt: Optional[str] = None,
         sample_rate: int = 16_000,
         language: Optional[str] = None,
     ) -> str:
@@ -80,6 +81,7 @@ class Transcriber:
         Args:
             audio: float32 mono audio
             previous_context_text: last N chars of prior transcript for continuity
+            initial_prompt: domain prompt for first chunk (e.g. debate metadata)
             sample_rate: audio sample rate (default 16 kHz)
             language: language code (e.g. "en", "pt") or None for auto-detect
 
@@ -88,14 +90,16 @@ class Transcriber:
         """
         self._ensure_model()
 
-        initial_prompt = ""
+        effective_prompt = ""
         if previous_context_text:
-            initial_prompt = _truncate_context(previous_context_text, self._context_window_size)
+            effective_prompt = _truncate_context(previous_context_text, self._context_window_size)
+        elif initial_prompt:
+            effective_prompt = initial_prompt
 
         segments, _ = self._model.transcribe(
             audio,
             language=language,
-            initial_prompt=initial_prompt if initial_prompt else None,
+            initial_prompt=effective_prompt if effective_prompt else None,
             vad_filter=self._vad_filter,
         )
 

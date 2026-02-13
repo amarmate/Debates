@@ -2,6 +2,7 @@
 Handles WebSocket audio: buffer, VAD, resample to 16kHz, and trigger transcription.
 """
 import logging
+import math
 import time
 from collections import deque
 from typing import Deque, Optional, Tuple
@@ -60,7 +61,7 @@ def trim_silence(
 
 
 def resample_to_16k(audio: np.ndarray, orig_sr: int) -> np.ndarray:
-    """Resample audio to 16 kHz mono float32."""
+    """Resample audio to 16 kHz mono float32. Uses scipy.signal.resample_poly when available."""
     if orig_sr == TARGET_SAMPLE_RATE:
         if audio.dtype != np.float32:
             audio = audio.astype(np.float32) / np.iinfo(np.int16).max
@@ -69,10 +70,18 @@ def resample_to_16k(audio: np.ndarray, orig_sr: int) -> np.ndarray:
     if audio.dtype == np.int16:
         audio = audio.astype(np.float32) / 32768.0
 
-    num_samples = int(len(audio) * TARGET_SAMPLE_RATE / orig_sr)
-    indices = np.linspace(0, len(audio) - 1, num_samples)
-    resampled = np.interp(indices, np.arange(len(audio)), audio)
-    return resampled.astype(np.float32)
+    try:
+        from scipy.signal import resample_poly
+        g = math.gcd(orig_sr, TARGET_SAMPLE_RATE)
+        up = TARGET_SAMPLE_RATE // g
+        down = orig_sr // g
+        resampled = resample_poly(audio, up, down)
+        return resampled.astype(np.float32)
+    except ImportError:
+        num_samples = int(len(audio) * TARGET_SAMPLE_RATE / orig_sr)
+        indices = np.linspace(0, len(audio) - 1, num_samples)
+        resampled = np.interp(indices, np.arange(len(audio)), audio)
+        return resampled.astype(np.float32)
 
 
 class WebAudioBuffer:

@@ -6,7 +6,7 @@ import sys
 import time
 
 from pipeline.config import DEFAULT_CONFIG
-from pipeline.utils import resolve_device
+from pipeline.utils import resolve_compute_type, resolve_device
 from pipeline.src.audio_stream import AudioStream
 from pipeline.src.transcriber import Transcriber
 
@@ -24,6 +24,7 @@ def run_pipeline(config=None) -> None:
     cfg = config or DEFAULT_CONFIG
 
     device = resolve_device(cfg.DEVICE)
+    compute_type = resolve_compute_type(cfg.COMPUTE_TYPE, device)
 
     debug_dir = "data/raw_audio" if cfg.DEBUG_MODE else None
 
@@ -42,7 +43,7 @@ def run_pipeline(config=None) -> None:
     transcriber = Transcriber(
         model_size=cfg.MODEL_SIZE,
         device=device,
-        compute_type=cfg.COMPUTE_TYPE,
+        compute_type=compute_type,
         context_window_size=cfg.CONTEXT_WINDOW_SIZE,
     )
 

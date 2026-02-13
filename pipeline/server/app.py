@@ -14,7 +14,8 @@ from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from pipeline.config import DEFAULT_CONFIG
-from pipeline.utils import resolve_device
+from pipeline.debate_metadata import build_initial_prompt, lookup_debate_metadata
+from pipeline.utils import resolve_compute_type, resolve_device
 from pipeline.server.audio_handler import (
     TARGET_SAMPLE_RATE,
     WebAudioBuffer,
@@ -46,10 +47,11 @@ def get_transcriber(model_size: str = "small") -> Transcriber:
         if model_size not in _transcribers:
             cfg = DEFAULT_CONFIG
             device = resolve_device(cfg.DEVICE)
+            compute_type = resolve_compute_type(cfg.COMPUTE_TYPE, device)
             _transcribers[model_size] = Transcriber(
                 model_size=model_size,
                 device=device,
-                compute_type=cfg.COMPUTE_TYPE,
+                compute_type=compute_type,
                 context_window_size=cfg.CONTEXT_WINDOW_SIZE,
                 vad_filter=cfg.VAD_FILTER,
             )
@@ -101,24 +103,33 @@ async def _process_file_chunk(
     language: Optional[str],
     model_size: str,
     last_context_ref: list,
+    first_prompt_ref: list,
+    trim_silence_file: bool,
 ) -> None:
     """Transcribe one file chunk and send result."""
     audio_float = audio_int16.astype(np.float32) / 32768.0
     audio_16k = resample_to_16k(audio_float, sample_rate)
-    audio_16k = trim_silence(audio_16k, TARGET_SAMPLE_RATE)
+    if trim_silence_file:
+        audio_16k = trim_silence(audio_16k, TARGET_SAMPLE_RATE)
     if len(audio_16k) < 100:
         return
     transcriber = get_transcriber(model_size)
+    initial_prompt = first_prompt_ref[0] if first_prompt_ref else None
+    previous_context = last_context_ref[0] if last_context_ref else ""
+    if initial_prompt is not None:
+        first_prompt_ref[0] = None
+
+    def _transcribe():
+        return transcriber.transcribe_chunk(
+            audio_16k,
+            previous_context_text=previous_context if previous_context else None,
+            initial_prompt=initial_prompt,
+            language=language,
+        )
+
     loop = asyncio.get_event_loop()
     try:
-        text = await loop.run_in_executor(
-            None,
-            lambda: transcriber.transcribe_chunk(
-                audio_16k,
-                previous_context_text=last_context_ref[0] if last_context_ref else "",
-                language=language,
-            ),
-        )
+        text = await loop.run_in_executor(None, _transcribe)
     except Exception:
         logger.exception("Transcription failed")
         return
@@ -137,6 +148,8 @@ async def file_chunk_worker(
     language: Optional[str],
     model_size: str,
     last_context_ref: list,
+    first_prompt_ref: list,
+    trim_silence_file: bool,
 ) -> None:
     """Process file chunks sequentially so transcription streams during playback."""
     while True:
@@ -144,7 +157,10 @@ async def file_chunk_worker(
         if item is None:
             break
         audio_arr, sr = item
-        await _process_file_chunk(ws, audio_arr, sr, language, model_size, last_context_ref)
+        await _process_file_chunk(
+            ws, audio_arr, sr, language, model_size,
+            last_context_ref, first_prompt_ref, trim_silence_file,
+        )
         queue.task_done()
 
 
@@ -225,6 +241,7 @@ async def websocket_endpoint(ws: WebSocket):
                 language = cfg.get("language") or None
                 model_size = cfg.get("model_size") or DEFAULT_CONFIG.MODEL_SIZE
                 source_type = cfg.get("source") or "mic"
+                filename = cfg.get("filename") or None
                 buffer = WebAudioBuffer(
                     sample_rate=sample_rate,
                     silence_threshold=DEFAULT_CONFIG.SILENCE_THRESHOLD,
@@ -236,9 +253,15 @@ async def websocket_endpoint(ws: WebSocket):
                 await loop.run_in_executor(None, lambda: get_transcriber(model_size))
                 if source_type == "file":
                     file_queue = asyncio.Queue()
+                    audio_path = (AUDIO_DIR / filename) if filename else None
+                    metadata = lookup_debate_metadata(audio_path) if audio_path else None
+                    initial_prompt = build_initial_prompt(metadata)
+                    first_prompt_ref = [initial_prompt] if initial_prompt else [None]
                     file_worker = asyncio.create_task(
                         file_chunk_worker(
-                            ws, file_queue, sample_rate, language, model_size, last_context_ref
+                            ws, file_queue, sample_rate, language, model_size,
+                            last_context_ref, first_prompt_ref,
+                            DEFAULT_CONFIG.TRIM_SILENCE_FILE_CHUNKS,
                         )
                     )
                 elif task is None:

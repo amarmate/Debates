@@ -121,6 +121,7 @@
     const cfg = getConfig();
     cfg.sample_rate = sampleRate;
     cfg.source = 'file';
+    cfg.filename = filename;
     ws.send(JSON.stringify(cfg));
 
     const readyData = await readyPromise;
@@ -163,7 +164,7 @@
         fileChunkInterval = setTimeout(sendNextChunk, fileChunkDuration * 1000);
       }
     }
-    setTimeout(sendNextChunk, 100);
+    setTimeout(sendNextChunk, fileChunkDuration * 1000);
   }
 
   async function startMic() {
