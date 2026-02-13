@@ -96,6 +96,7 @@ class WebAudioBuffer:
         silence_duration_ms: float = 500.0,
         min_chunk_duration: float = 1.0,
         max_chunk_duration: float = 10.0,
+        max_buffer_seconds: Optional[float] = None,
     ):
         self._sample_rate = sample_rate
         self._silence_threshold = silence_threshold
@@ -105,7 +106,8 @@ class WebAudioBuffer:
         self._buffer: Deque[np.ndarray] = deque()
         self._total_samples = 0
         self._silence_start: Optional[float] = None
-        max_samples = int(max_chunk_duration * sample_rate) + 4096
+        buffer_sec = max_buffer_seconds if max_buffer_seconds is not None else max_chunk_duration
+        max_samples = int(buffer_sec * sample_rate) + 4096
         self._max_samples = max_samples
 
     def append(self, chunk: np.ndarray) -> None:
@@ -144,6 +146,21 @@ class WebAudioBuffer:
         else:
             self._silence_start = None
         return False, "waiting"
+
+    def get_rolling_audio(self, seconds: float) -> Optional[np.ndarray]:
+        """
+        Return the last N seconds of audio without clearing the buffer.
+        Non-destructive read for rolling-window transcription.
+        """
+        if not self._buffer or seconds <= 0:
+            return None
+        n_samples = int(seconds * self._sample_rate)
+        if n_samples <= 0:
+            return None
+        flat = np.concatenate(list(self._buffer))
+        if len(flat) <= n_samples:
+            return flat.astype(np.float32)
+        return flat[-n_samples:].astype(np.float32)
 
     def extract_chunk(self) -> Optional[np.ndarray]:
         """Extract buffer as float32 at buffer sample rate."""

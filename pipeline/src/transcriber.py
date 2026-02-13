@@ -8,6 +8,10 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Whisper's initial_prompt is limited to 224 tokens. Use ~4 chars/token heuristic for Portuguese.
+WHISPER_PROMPT_MAX_TOKENS = 224
+CHARS_PER_TOKEN_ESTIMATE = 4
+
 
 def _truncate_context(text: str, max_chars: int) -> str:
     """Return the last max_chars of text, preserving word boundaries if possible."""
@@ -22,6 +26,40 @@ def _truncate_context(text: str, max_chars: int) -> str:
     if first_space > 0:
         return truncated[first_space + 1 :].strip()
     return truncated
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate for Portuguese (~4 chars/token)."""
+    if not text:
+        return 0
+    return max(1, len(text.strip()) // CHARS_PER_TOKEN_ESTIMATE)
+
+
+def _truncate_to_token_limit(
+    initial_prompt: str,
+    previous_context: str,
+    max_tokens: int = WHISPER_PROMPT_MAX_TOKENS,
+) -> str:
+    """
+    Build combined prompt and truncate to fit Whisper's 224-token limit.
+    Never truncates initial_prompt; only truncates previous_context.
+    """
+    sep = " ... "
+    if not initial_prompt and not previous_context:
+        return ""
+    if not previous_context:
+        return initial_prompt.strip()
+    if not initial_prompt:
+        max_chars = max_tokens * CHARS_PER_TOKEN_ESTIMATE
+        return _truncate_context(previous_context, max_chars)
+    # Both present: keep initial_prompt intact, truncate previous_context as needed
+    prefix = initial_prompt.strip()
+    prefix_tokens = _estimate_tokens(prefix)
+    sep_tokens = _estimate_tokens(sep)
+    suffix_max_tokens = max(0, max_tokens - prefix_tokens - sep_tokens)
+    suffix_max_chars = suffix_max_tokens * CHARS_PER_TOKEN_ESTIMATE
+    truncated_suffix = _truncate_context(previous_context, suffix_max_chars)
+    return f"{prefix}{sep}{truncated_suffix}" if truncated_suffix else prefix
 
 
 class Transcriber:
@@ -94,25 +132,22 @@ class Transcriber:
         """
         self._ensure_model()
 
-        effective_prompt = ""
-        prompt_source = ""
-        if previous_context_text:
-            effective_prompt = _truncate_context(previous_context_text, self._context_window_size)
-            prompt_source = "previous_context"
-        elif initial_prompt:
-            effective_prompt = initial_prompt
-            prompt_source = "initial_prompt"
+        # Always combine initial_prompt + previous_context; never use if/elif.
+        # Truncate only previous_context to fit token limit; never truncate initial_prompt.
+        truncated_context = ""
+        if previous_context_text and previous_context_text.strip():
+            truncated_context = _truncate_context(
+                previous_context_text, self._context_window_size
+            )
+        effective_prompt = _truncate_to_token_limit(
+            (initial_prompt or "").strip(),
+            truncated_context,
+        )
 
         if effective_prompt:
             logger.info(
-                "Prompt [%s]: %s",
-                prompt_source,
+                "Prompt [combined]: %s",
                 effective_prompt[:200] + ("..." if len(effective_prompt) > 200 else ""),
-            )
-        if prompt_source == "previous_context" and previous_context_text:
-            logger.info(
-                "Context (full): %s",
-                previous_context_text[:300] + ("..." if len(previous_context_text) > 300 else ""),
             )
 
         segments, _ = self._model.transcribe(

@@ -5,6 +5,7 @@ import asyncio
 import logging
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +27,33 @@ from pipeline.server.audio_handler import (
 from pipeline.src.transcriber import Transcriber
 
 logger = logging.getLogger(__name__)
+
+
+def extract_new_suffix(last_sent: str, text_new: str) -> str:
+    """
+    Extract only the new portion of transcript to avoid duplicate output.
+    For rolling buffer: Whisper returns full transcript per window; windows overlap.
+    Find overlap at boundary (end of last_sent matches start of text_new) and return remainder.
+    """
+    if not last_sent:
+        return text_new.strip()
+    text_new = text_new.strip()
+    if not text_new:
+        return ""
+    # Cumulative case: new text extends last_sent
+    if text_new.startswith(last_sent) and len(text_new) > len(last_sent):
+        return text_new[len(last_sent) :].lstrip()
+    last_stripped = last_sent.rstrip()
+    if text_new.startswith(last_stripped) and len(text_new) > len(last_stripped):
+        return text_new[len(last_stripped) :].lstrip()
+    # Overlapping windows: find longest overlap at boundary
+    max_overlap = min(len(last_sent), len(text_new))
+    for i in range(max_overlap, 0, -1):
+        if last_sent[-i:] == text_new[:i]:
+            suffix = text_new[i:].strip()
+            return suffix if suffix else text_new
+    return text_new
+
 
 app = FastAPI(title="Speech-to-Fact")
 
@@ -119,8 +147,7 @@ async def _process_file_chunk(
     transcriber = get_transcriber(model_size)
     initial_prompt = first_prompt_ref[0] if first_prompt_ref else None
     previous_context = last_context_ref[0] if last_context_ref else ""
-    if initial_prompt is not None:
-        first_prompt_ref[0] = None
+    # Do NOT clear first_prompt_ref: always pass initial_prompt for proper-name recognition
 
     def _transcribe():
         text = transcriber.transcribe_chunk(
@@ -178,36 +205,45 @@ async def process_audio_loop(
     sample_rate: int,
     language: Optional[str] = None,
     model_size: str = "small",
+    initial_prompt: Optional[str] = None,
 ):
+    cfg = DEFAULT_CONFIG
     transcriber = get_transcriber(model_size)
     last_context = ""
+    last_sent = ""
+    last_process = 0.0
     poll_interval = 0.05
+    min_samples = int(cfg.MIN_CHUNK_DURATION * TARGET_SAMPLE_RATE)
 
     while True:
         await asyncio.sleep(poll_interval)
-        should_extract, reason = buffer.should_extract_chunk()
-        if not should_extract:
+        now = time.monotonic()
+        should_by_time = (now - last_process) >= cfg.ROLLING_INTERVAL_SEC
+        should_by_vad, _ = buffer.should_extract_chunk()
+        if not should_by_time and not should_by_vad:
             continue
 
-        chunk = buffer.extract_chunk()
-        if chunk is None or len(chunk) == 0:
+        audio = buffer.get_rolling_audio(seconds=cfg.ROLLING_BUFFER_SEC)
+        if audio is None or len(audio) < min_samples:
             continue
 
-        audio_16k = resample_to_16k(chunk, sample_rate)
+        audio_16k = resample_to_16k(audio, sample_rate)
         audio_16k = trim_silence(audio_16k, TARGET_SAMPLE_RATE)
-        if len(audio_16k) < 100:
+        if len(audio_16k) < min_samples:
             continue
 
+        last_process = now
         loop = asyncio.get_event_loop()
         lang = language
 
         def _transcribe_mic():
             t = transcriber.transcribe_chunk(
                 audio_16k,
-                previous_context_text=last_context,
+                previous_context_text=last_context or None,
+                initial_prompt=initial_prompt,
                 language=lang,
             )
-            if t and DEFAULT_CONFIG.PUNCTUATION_RESTORE:
+            if t and cfg.PUNCTUATION_RESTORE:
                 t = restore_punctuation(t)
             if t:
                 t = cleanup_chunk_artifacts(t)
@@ -221,10 +257,13 @@ async def process_audio_loop(
 
         if text:
             last_context = text
-            try:
-                await ws.send_json({"type": "transcript", "text": text})
-            except Exception:
-                break
+            to_send = extract_new_suffix(last_sent, text)
+            if to_send:
+                last_sent = text
+                try:
+                    await ws.send_json({"type": "transcript", "text": to_send})
+                except Exception:
+                    break
 
 
 @app.websocket("/ws")
@@ -262,6 +301,7 @@ async def websocket_endpoint(ws: WebSocket):
                     silence_duration_ms=DEFAULT_CONFIG.SILENCE_DURATION_MS,
                     min_chunk_duration=DEFAULT_CONFIG.MIN_CHUNK_DURATION,
                     max_chunk_duration=DEFAULT_CONFIG.MAX_CHUNK_DURATION,
+                    max_buffer_seconds=DEFAULT_CONFIG.ROLLING_BUFFER_SEC,
                 )
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, lambda: get_transcriber(model_size))
@@ -301,6 +341,7 @@ async def websocket_endpoint(ws: WebSocket):
                             silence_duration_ms=DEFAULT_CONFIG.SILENCE_DURATION_MS,
                             min_chunk_duration=DEFAULT_CONFIG.MIN_CHUNK_DURATION,
                             max_chunk_duration=DEFAULT_CONFIG.MAX_CHUNK_DURATION,
+                            max_buffer_seconds=DEFAULT_CONFIG.ROLLING_BUFFER_SEC,
                         )
                         task = asyncio.create_task(
                             process_audio_loop(ws, buffer, sample_rate, language, model_size)
