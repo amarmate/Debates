@@ -64,6 +64,11 @@
       color: var(--text);
       cursor: pointer;
     }
+    .file-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
     button {
       font-family: inherit;
       font-size: 1rem;
@@ -156,6 +161,17 @@
   <div class="container">
     <h1>Speech-to-Fact</h1>
     <div class="controls">
+      <label class="lang-label">Source</label>
+      <select id="source" class="lang-select">
+        <option value="mic">Microphone</option>
+        <option value="file">Audio file</option>
+      </select>
+      <div id="fileSelectWrap" class="file-wrap" style="display: none;">
+        <label for="fileSelect" class="lang-label">File</label>
+        <select id="fileSelect" class="lang-select">
+          <option value="">– loading –</option>
+        </select>
+      </div>
       <label for="modelSize" class="lang-label">Model</label>
       <select id="modelSize" class="lang-select">
         <option value="tiny">Tiny</option>
@@ -181,9 +197,9 @@
         <option value="ja">Japanese</option>
         <option value="zh">Chinese</option>
       </select>
-      <button id="toggleBtn" type="button">Start talking</button>
+      <button id="toggleBtn" type="button">Start</button>
     </div>
-    <p class="status" id="status">Click Start to begin. Allow microphone access when prompted.</p>
+    <p class="status" id="status">Choose source, then click Start. Allow microphone access when using Mic.</p>
     <div class="visualizer-wrapper">
       <h3>Live audio</h3>
       <canvas id="canvas" width="608" height="80"></canvas>

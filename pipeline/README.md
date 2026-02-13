@@ -38,9 +38,15 @@ Press **Ctrl+C** to stop.
 
 Run the web app with Start button, live audio visualizer, and transcript:
 
-```powershell
+```bash
 uv pip install -e ".[pipeline,server]"
 uv run python -m pipeline.server
+```
+
+If you get `ModuleNotFoundError: No module named 'fastapi'`, ensure you install with the `server` extra:
+
+```bash
+uv pip install -e ".[pipeline,server]"
 ```
 
 Open http://localhost:8000 in your browser.

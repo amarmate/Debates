@@ -90,11 +90,12 @@ class Transcriber:
         if previous_context_text:
             initial_prompt = _truncate_context(previous_context_text, self._context_window_size)
 
-        # faster-whisper expects 16 kHz mono float32; no sample_rate param
+        # vad_filter removes silence to reduce hallucinations
         segments, _ = self._model.transcribe(
             audio,
             language=language,
             initial_prompt=initial_prompt if initial_prompt else None,
+            vad_filter=True,
         )
 
         parts = []

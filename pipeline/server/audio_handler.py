@@ -22,6 +22,43 @@ def rms_level(audio: np.ndarray) -> float:
     return float(np.sqrt(np.mean(audio**2)))
 
 
+def trim_silence(
+    audio: np.ndarray,
+    sample_rate: int,
+    threshold: float = 0.01,
+    frame_ms: float = 30.0,
+    min_speech_ms: float = 250.0,
+) -> np.ndarray:
+    """Remove leading and trailing silence to reduce hallucinations."""
+    if audio.size == 0:
+        return audio
+    if audio.dtype != np.float32:
+        audio = audio.astype(np.float32) / np.iinfo(np.int16).max
+    frame = int(sample_rate * frame_ms / 1000)
+    min_speech = int(sample_rate * min_speech_ms / 1000)
+    if len(audio) < min_speech:
+        return audio
+
+    energy = np.abs(audio)
+    n_windows = max(1, len(audio) - frame)
+    window_rms = np.array(
+        [np.sqrt(np.mean(energy[i : i + frame] ** 2)) for i in range(0, n_windows)]
+    )
+    speech = window_rms > threshold
+    if not np.any(speech):
+        return audio
+
+    first_speech = int(np.argmax(speech))
+    last_speech = len(speech) - 1 - int(np.argmax(speech[::-1]))
+    if last_speech < first_speech:
+        return audio
+    start = max(0, first_speech)
+    end = min(len(audio), last_speech + frame)
+    if start >= end or (end - start) < min_speech:
+        return audio
+    return audio[start:end]
+
+
 def resample_to_16k(audio: np.ndarray, orig_sr: int) -> np.ndarray:
     """Resample audio to 16 kHz mono float32."""
     if orig_sr == TARGET_SAMPLE_RATE:
