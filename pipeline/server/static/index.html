@@ -396,12 +396,8 @@
             <input type="number" id="cfgRollingIntervalSec" step="0.5" min="0" />
           </div>
           <div class="config-item">
-            <label for="cfgRollingBufferSec">Rolling buffer (s)</label>
-            <input type="number" id="cfgRollingBufferSec" step="1" min="0" />
-          </div>
-          <div class="config-item">
-            <label for="cfgFileChunkDuration">File chunk duration (s)</label>
-            <input type="number" id="cfgFileChunkDuration" step="0.5" min="0" />
+            <label for="cfgRollingBufferSec">Rolling buffer / file chunk (s)</label>
+            <input type="number" id="cfgRollingBufferSec" step="1" min="0" title="Buffer size for transcription; also used as file chunk duration when streaming" />
           </div>
         </div>
       </div>

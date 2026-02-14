@@ -7,6 +7,7 @@ with speaker diarization. Run from project root:
 
   uv run python transcribe_all.py --model inesc-id/WhisperLv3-EP-X
   uv run python transcribe_all.py --model base --no-diarization
+  uv run python transcribe_all.py --model base --output-format timestamped
 """
 
 import argparse
@@ -100,6 +101,8 @@ def _run_transcription_subprocess(
 
     if args.chunk_length_s is not None:
         cmd.extend(["--chunk-length-s", str(args.chunk_length_s)])
+    if getattr(args, "output_format", None):
+        cmd.extend(["--output-format", args.output_format])
 
     logger.info("Starting transcription subprocess: %s", " ".join(cmd))
 
@@ -162,6 +165,12 @@ def main() -> None:
         default=None,
         help="Whisper chunk_length_s",
     )
+    parser.add_argument(
+        "--output-format",
+        choices=["annotated", "timestamped"],
+        default="annotated",
+        help="Output format: 'annotated' (speaker labels) or 'timestamped' ([start,end] : 'text')",
+    )
     args = parser.parse_args()
 
     # Step 1: Download Debates
@@ -182,6 +191,7 @@ def main() -> None:
     logger.info("Model: %s", args.model)
     logger.info("Diarization: %s", "Disabled" if args.no_diarization else "Enabled")
     logger.info("VAD: %s", "Disabled" if args.no_vad else "Enabled")
+    logger.info("Output format: %s", args.output_format)
     if args.prompt:
         logger.info("Custom prompt: %s...", args.prompt[:80])
     logger.info("=" * 80)

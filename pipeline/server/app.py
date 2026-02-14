@@ -401,7 +401,7 @@ async def websocket_endpoint(ws: WebSocket):
                     )
                 ready_payload = {"type": "ready", "sample_rate": sample_rate}
                 if source_type == "file":
-                    ready_payload["file_chunk_duration"] = get_config().ROLLING_INTERVAL_SEC
+                    ready_payload["file_chunk_duration"] = get_config().ROLLING_BUFFER_SEC
                 await ws.send_json(ready_payload)
             elif "bytes" in msg:
                 data = msg["bytes"]

@@ -16,7 +16,6 @@ class PipelineConfig:
     # Chunk boundaries
     MIN_CHUNK_DURATION: float = 1.0  # Minimum seconds of audio before transcribing
     MAX_CHUNK_DURATION: float = 10.0  # Maximum seconds before forcing a cut
-    FILE_CHUNK_DURATION: float = 6.0  # Seconds per chunk when playing file (configurable)
 
     # Rolling buffer for low-latency live streaming (sub-10s)
     ROLLING_INTERVAL_SEC: float = 2.0  # Process every N seconds

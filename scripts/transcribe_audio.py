@@ -673,7 +673,8 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
                      condition_on_previous_text: bool = False,
                      compression_ratio_threshold: float = 2.0,
                      chunk_length_s: Optional[int] = None,
-                     enable_overlap_detection: bool = True):
+                     enable_overlap_detection: bool = True,
+                     output_format: str = "annotated"):
     """
     Transcribe an audio file using Whisper with progress tracking and optional speaker diarization.
     
@@ -880,9 +881,22 @@ def transcribe_audio(audio_path: str, language: str = "pt", model_size: str = "b
                 break
         segment["overlap"] = seg_overlap
     
-    # Generate annotated text
-    if segments and speaker_segments:
-        # Build text with speaker annotations
+    # Generate output text based on format
+    if output_format == "timestamped" and segments:
+        # Format: [start,end] : 'text'
+        lines = []
+        for seg in segments:
+            start = seg["start"]
+            end = seg["end"]
+            text = seg["text"].strip()
+            if seg.get("overlap", False):
+                text += " [!]"
+            # Escape single quotes in text
+            safe_text = text.replace("\\", "\\\\").replace("'", "\\'")
+            lines.append(f"[{start:.2f},{end:.2f}] : '{safe_text}'")
+        annotated_text = "\n".join(lines)
+    elif segments and speaker_segments:
+        # Build text with speaker annotations (default)
         annotated_lines = []
         current_speaker = None
         
@@ -996,6 +1010,12 @@ if __name__ == "__main__":
         help="Whisper compression_ratio_threshold",
     )
     parser.add_argument("--chunk-length-s", type=int, default=None, help="Whisper chunk_length_s")
+    parser.add_argument(
+        "--output-format",
+        choices=["annotated", "timestamped"],
+        default="annotated",
+        help="Output format: 'annotated' (speaker labels) or 'timestamped' ([start,end] : 'text')",
+    )
     cli_args = parser.parse_args()
 
     audio_file = cli_args.audio_file
@@ -1008,6 +1028,7 @@ if __name__ == "__main__":
     condition_on_previous_text = str(cli_args.condition_on_previous_text).lower() in ("1", "true", "yes", "y", "on")
     compression_ratio_threshold = cli_args.compression_ratio_threshold
     chunk_length_s = cli_args.chunk_length_s
+    output_format = cli_args.output_format
 
     # Warn if diarization is enabled but pyannote is not available
     if enable_diarization and not pyannote_available:
@@ -1045,4 +1066,5 @@ if __name__ == "__main__":
         compression_ratio_threshold=compression_ratio_threshold,
         chunk_length_s=chunk_length_s,
         enable_overlap_detection=enable_overlap_detection,
+        output_format=output_format,
     )
