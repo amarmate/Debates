@@ -2,21 +2,81 @@
 
 Real-time audio transcription using faster-whisper with a sliding-window context injection mechanism.
 
-## Setup
+## Installation
 
-Install pipeline dependencies:
+### Web app (recommended)
+
+Install pipeline and server dependencies:
 
 ```powershell
-uv pip install -e ".[pipeline]"
+uv pip install -e ".[pipeline,server]"
 ```
 
 Or with pip:
 
 ```powershell
 pip install -r pipeline/requirements.txt
+pip install fastapi uvicorn[standard]
 ```
 
-## Run
+### Terminal-only mode
+
+If you only need the console transcription (no web UI):
+
+```powershell
+uv pip install -e ".[pipeline]"
+```
+
+Or:
+
+```powershell
+pip install -r pipeline/requirements.txt
+```
+
+## Web App
+
+### Run
+
+From the project root:
+
+```powershell
+uv run python -m pipeline.server
+```
+
+Or:
+
+```powershell
+python -m pipeline.server
+```
+
+Open **http://localhost:8000** in your browser.
+
+If you get `ModuleNotFoundError: No module named 'fastapi'`, install with the `server` extra:
+
+```powershell
+uv pip install -e ".[pipeline,server]"
+```
+
+### Usage
+
+1. **Source** – Choose **Microphone** (live speech) or **Audio file** (pre-recorded).
+2. **File** – When using Audio file, select a file from the dropdown. Files are loaded from `data/debates/` (MP3, WAV, M4A, OGG, FLAC).
+3. **Model** – Pick a Whisper model: Tiny (fastest), Base, Small, Medium, Turbo, Large v2/v3.
+4. **Language** – Auto-detect or force a language (e.g. Portuguese, English).
+5. **Debug** – Check “Show frame transcriptions” to see raw per-window output.
+6. **Start** – Click to begin. For microphone, allow browser access when prompted.
+
+### Output
+
+- **Transcript** – Live text as you speak or as the file plays.
+- **Sentences (for fact-checking)** – Complete sentences, one per line, suitable for fact-checking.
+- **Debug frames** – Raw transcription per time window (when enabled).
+
+### Settings tab
+
+Use the **Settings** tab to adjust VAD, rolling buffer, Whisper tuning, and features. Changes are saved to the server and apply to the next session.
+
+## Terminal Mode
 
 From the project root:
 
@@ -24,36 +84,13 @@ From the project root:
 uv run python -m pipeline.src.main
 ```
 
-Or:
-
-```powershell
-python -m pipeline.src.main
-```
-
 Speak into your microphone. Transcription appears in the console as silence-separated chunks.
 
 Press **Ctrl+C** to stop.
 
-## Web Server (Browser UI)
-
-Run the web app with Start button, live audio visualizer, and transcript:
-
-```bash
-uv pip install -e ".[pipeline,server]"
-uv run python -m pipeline.server
-```
-
-If you get `ModuleNotFoundError: No module named 'fastapi'`, ensure you install with the `server` extra:
-
-```bash
-uv pip install -e ".[pipeline,server]"
-```
-
-Open http://localhost:8000 in your browser.
-
 ## Configuration
 
-Edit `pipeline/config.py` to adjust:
+Edit `pipeline/config.py` to adjust defaults:
 
 - `SILENCE_THRESHOLD` – RMS below which audio is considered silent
 - `MIN_CHUNK_DURATION` / `MAX_CHUNK_DURATION` – chunk bounds
