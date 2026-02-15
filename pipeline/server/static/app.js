@@ -64,13 +64,25 @@
     sentencesList.parentElement.scrollTop = sentencesList.parentElement.scrollHeight;
   }
 
-  function appendDebugFrame(timeRange, raw) {
+  function escapeHtml(s) {
+    return (s || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function appendDebugFrame(timeRange, raw, mergeInfo) {
     if (!debugWrapper || !debugFramesList) return;
     debugWrapper.classList.add('visible');
     const entry = document.createElement('div');
     entry.className = 'debug-frame';
     const [start, end] = timeRange;
-    entry.innerHTML = '<div class="debug-frame-label">[' + start + ' - ' + end + ' sec]</div><div class="debug-frame-raw">' + (raw || '(empty)').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+    let html = '<div class="debug-frame-label">[' + start + ' - ' + end + ' sec]</div><div class="debug-frame-raw">' + escapeHtml(raw || '(empty)') + '</div>';
+    if (mergeInfo && (mergeInfo.anchor || mergeInfo.new_content !== undefined)) {
+      html += '<div class="debug-frame-merge">';
+      if (mergeInfo.anchor) html += '<div class="debug-merge-anchor"><strong>Anchor:</strong> ' + escapeHtml(mergeInfo.anchor) + '</div>';
+      if (mergeInfo.match_size > 0) html += '<div class="debug-merge-size"><strong>Match:</strong> ' + mergeInfo.match_size + ' chars</div>';
+      if (mergeInfo.new_content !== undefined) html += '<div class="debug-merge-appended"><strong>Appended:</strong> ' + escapeHtml(mergeInfo.new_content || '(none)') + '</div>';
+      html += '</div>';
+    }
+    entry.innerHTML = html;
     debugFramesList.appendChild(entry);
     debugWrapper.scrollTop = debugWrapper.scrollHeight;
   }
@@ -315,7 +327,7 @@
       } else if (data.type === 'sentence' && data.text) {
         appendSentence(data.text);
       } else if (data.type === 'debug_frame' && data.time_range) {
-        appendDebugFrame(data.time_range, data.raw);
+        appendDebugFrame(data.time_range, data.raw, data.merge_info);
       }
     };
 
@@ -434,6 +446,8 @@
     CONTEXT_WINDOW_SIZE: () => document.getElementById('cfgContextWindowSize'),
     REPETITION_PENALTY: () => document.getElementById('cfgRepetitionPenalty'),
     COMPRESSION_RATIO_THRESHOLD: () => document.getElementById('cfgCompressionRatioThreshold'),
+    INITIAL_PROMPT_ENABLED: () => document.getElementById('cfgInitialPromptEnabled'),
+    CONTEXT_INJECTION_ENABLED: () => document.getElementById('cfgContextInjectionEnabled'),
     VAD_FILTER: () => document.getElementById('cfgVadFilter'),
     PUNCTUATION_RESTORE: () => document.getElementById('cfgPunctuationRestore'),
     TRIM_SILENCE_FILE_CHUNKS: () => document.getElementById('cfgTrimSilenceFileChunks'),
@@ -452,6 +466,8 @@
     CONTEXT_WINDOW_SIZE: 450,
     REPETITION_PENALTY: 1.1,
     COMPRESSION_RATIO_THRESHOLD: 3,
+    INITIAL_PROMPT_ENABLED: true,
+    CONTEXT_INJECTION_ENABLED: true,
     VAD_FILTER: false,
     PUNCTUATION_RESTORE: true,
     TRIM_SILENCE_FILE_CHUNKS: false,

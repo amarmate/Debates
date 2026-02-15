@@ -22,40 +22,62 @@ def _normalize_for_overlap(s: str) -> str:
 def merge_chunks(
     accumulated_text: str,
     new_chunk: str,
-    search_window: int = 200,
+    search_window: int = 100,
     min_overlap: int = 10,
 ) -> str:
     """
-    Find longest overlap between end of accumulated_text and start of new_chunk,
-    append only the non-overlapping suffix. Uses difflib for fuzzy matching
-    when Whisper transcription varies slightly between chunks.
+    Merge overlapping chunks using anchor-anywhere algorithm.
+    Uses the last N chars of accumulated text as anchor, finds longest match
+    anywhere in new_chunk (handles Whisper hallucinations at start of new window),
+    appends only the non-overlapping suffix.
+    """
+    merged, _ = merge_chunks_with_meta(
+        accumulated_text, new_chunk, search_window, min_overlap
+    )
+    return merged
+
+
+def merge_chunks_with_meta(
+    accumulated_text: str,
+    new_chunk: str,
+    search_window: int = 100,
+    min_overlap: int = 10,
+) -> tuple[str, dict]:
+    """
+    Like merge_chunks but returns (merged_text, metadata) for debugging.
+    Metadata: anchor, match_size, new_content, raw_chunk.
     """
     new_chunk = new_chunk.strip()
-    if not new_chunk:
-        return accumulated_text
-    if not accumulated_text:
-        return new_chunk
+    meta: dict = {"anchor": "", "match_size": 0, "new_content": "", "raw_chunk": new_chunk}
 
-    look_back = (
+    if not new_chunk:
+        return accumulated_text, meta
+    if not accumulated_text:
+        return new_chunk, meta
+
+    anchor = (
         accumulated_text[-search_window:]
         if len(accumulated_text) > search_window
         else accumulated_text
     )
-    look_back_norm = _normalize_for_overlap(look_back)
-    new_chunk_norm = _normalize_for_overlap(new_chunk)
-    s = difflib.SequenceMatcher(None, look_back_norm, new_chunk_norm)
-    match = s.find_longest_match(0, len(look_back_norm), 0, len(new_chunk_norm))
+    meta["anchor"] = anchor
 
-    # Match must be at boundary: end of look_back (accumulated) and start of new_chunk
-    at_end_of_accumulated = match.a + match.size == len(look_back_norm)
-    at_start_of_chunk = match.b == 0
-    if match.size >= min_overlap and at_end_of_accumulated and at_start_of_chunk:
-        new_content_start = match.b + match.size
-        suffix = new_chunk[new_content_start:].strip()
-        return accumulated_text + (" " + suffix if suffix else "")
-    # Fallback: exact boundary match with normalized comparison for punctuation variance
-    suffix = _extract_new_suffix_normalized(accumulated_text, new_chunk).strip()
-    return accumulated_text + (" " + suffix if suffix else "")
+    matcher = difflib.SequenceMatcher(None, anchor, new_chunk)
+    match = matcher.find_longest_match(0, len(anchor), 0, len(new_chunk))
+
+    if match.size == 0 or match.size < min_overlap:
+        return accumulated_text + " " + new_chunk, meta
+
+    # Require match to span the end of the anchor (we are continuing from master's tail)
+    if match.a + match.size != len(anchor):
+        return accumulated_text + " " + new_chunk, meta
+
+    overlap_end_in_new = match.b + match.size
+    new_text = new_chunk[overlap_end_in_new:].strip()
+    meta["match_size"] = match.size
+    meta["new_content"] = new_text
+
+    return accumulated_text + (" " + new_text if new_text else ""), meta
 
 
 def _extract_new_suffix_normalized(last_sent: str, text_new: str) -> str:

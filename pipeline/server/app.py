@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pipeline.config import DEFAULT_CONFIG, config_to_dict, get_config, update_config
 from pipeline.debate_metadata import build_initial_prompt, lookup_debate_metadata
 from pipeline.punctuation_restore import cleanup_chunk_artifacts, restore_punctuation
-from pipeline.sentence_buffer import SentenceBuffer, merge_chunks
+from pipeline.sentence_buffer import SentenceBuffer, merge_chunks, merge_chunks_with_meta
 from pipeline.utils import resolve_compute_type, resolve_device
 from pipeline.server.audio_handler import (
     TARGET_SAMPLE_RATE,
@@ -190,8 +190,10 @@ async def file_rolling_worker(
             queue.task_done()
             continue
 
-        initial_prompt = first_prompt_ref[0] if first_prompt_ref else None
-        previous_context = last_context or None
+        initial_prompt = (
+            first_prompt_ref[0] if first_prompt_ref and cfg.INITIAL_PROMPT_ENABLED else None
+        )
+        previous_context = (last_context or None) if cfg.CONTEXT_INJECTION_ENABLED else None
 
         def _transcribe():
             t = transcriber.transcribe_chunk(
@@ -214,21 +216,40 @@ async def file_rolling_worker(
             queue.task_done()
             continue
 
+        merge_info = None
+        if text:
+            last_context = text
+            prev_len = len(full_transcript)
+            if debug_frames:
+                full_transcript, merge_meta = merge_chunks_with_meta(full_transcript, text)
+                merge_info = (
+                    {
+                        "anchor": merge_meta["anchor"],
+                        "match_size": merge_meta["match_size"],
+                        "new_content": merge_meta["new_content"],
+                    }
+                    if full_transcript and merge_meta["match_size"] > 0
+                    else None
+                )
+            else:
+                full_transcript = merge_chunks(full_transcript, text)
+                merge_info = None
+
         if debug_frames:
             window_start = max(0.0, total_elapsed_sec - cfg.ROLLING_BUFFER_SEC)
+            payload = {
+                "type": "debug_frame",
+                "time_range": [round(window_start, 1), round(total_elapsed_sec, 1)],
+                "raw": text or "",
+            }
+            if merge_info is not None:
+                payload["merge_info"] = merge_info
             try:
-                await ws.send_json({
-                    "type": "debug_frame",
-                    "time_range": [round(window_start, 1), round(total_elapsed_sec, 1)],
-                    "raw": text or "",
-                })
+                await ws.send_json(payload)
             except Exception:
                 pass
 
         if text:
-            last_context = text
-            prev_len = len(full_transcript)
-            full_transcript = merge_chunks(full_transcript, text)
             to_send = full_transcript[prev_len:].strip()
             if to_send:
                 try:
@@ -300,10 +321,12 @@ async def process_audio_loop(
         lang = language
 
         def _transcribe_mic():
+            prev_ctx = (last_context or None) if cfg.CONTEXT_INJECTION_ENABLED else None
+            init_prompt = initial_prompt if cfg.INITIAL_PROMPT_ENABLED else None
             t = transcriber.transcribe_chunk(
                 audio_16k,
-                previous_context_text=last_context or None,
-                initial_prompt=initial_prompt,
+                previous_context_text=prev_ctx,
+                initial_prompt=init_prompt,
                 language=lang,
             )
             if t and cfg.PUNCTUATION_RESTORE:

@@ -23,6 +23,8 @@ class PipelineConfig:
 
     # Context injection (sliding window)
     CONTEXT_WINDOW_SIZE: int = 450  # Characters from previous transcript to inject
+    INITIAL_PROMPT_ENABLED: bool = True  # Use debate metadata / domain prompt for first chunk
+    CONTEXT_INJECTION_ENABLED: bool = True  # Pass previous transcript context to each chunk
 
     # File playback: skip trim_silence on chunks (preserves boundaries, reduces clipping)
     TRIM_SILENCE_FILE_CHUNKS: bool = False

@@ -207,6 +207,19 @@
       white-space: pre-wrap;
       word-wrap: break-word;
     }
+    .debug-frame-merge {
+      margin-top: 0.5rem;
+      padding-top: 0.5rem;
+      border-top: 1px dashed var(--border);
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .debug-merge-anchor,
+    .debug-merge-size,
+    .debug-merge-appended {
+      margin-top: 0.25rem;
+      word-wrap: break-word;
+    }
     .sentences-wrapper {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -450,6 +463,18 @@
       <div class="config-section">
         <h3>Features</h3>
         <div class="config-grid">
+          <div class="config-item">
+            <label class="checkbox-wrap" title="Use debate metadata / domain prompt for first chunk">
+              <input type="checkbox" id="cfgInitialPromptEnabled" />
+              <span>Initial prompt</span>
+            </label>
+          </div>
+          <div class="config-item">
+            <label class="checkbox-wrap" title="Pass previous transcript context to each Whisper run">
+              <input type="checkbox" id="cfgContextInjectionEnabled" />
+              <span>Context injection</span>
+            </label>
+          </div>
           <div class="config-item">
             <label class="checkbox-wrap">
               <input type="checkbox" id="cfgVadFilter" />
