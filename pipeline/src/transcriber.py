@@ -2,6 +2,7 @@
 Transcription using faster-whisper with context injection for continuity.
 """
 import logging
+from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
@@ -16,6 +17,23 @@ CHARS_PER_TOKEN_ESTIMATE = 4
 # Prevents "poisoned prompt" where overlapping/future text causes hallucinations.
 SAFE_PROMPT_MARGIN_SEC = 2.0  # Exclude 2s before window to avoid overlap leakage
 SAFE_PROMPT_CONTEXT_CHARS = 200  # Last N chars of safe text only
+
+
+@dataclass(frozen=True)
+class TranscribedWord:
+    """Word token with local segment timestamps."""
+    start: float
+    end: float
+    word: str
+
+
+@dataclass(frozen=True)
+class TranscribedSegment:
+    """Transcribed segment with segment-level and word-level timing."""
+    start: float
+    end: float
+    text: str
+    words: tuple[TranscribedWord, ...] = ()
 
 
 def get_safe_prompt(
@@ -194,7 +212,7 @@ class Transcriber:
         initial_prompt: Optional[str] = None,
         sample_rate: int = 16_000,
         language: Optional[str] = None,
-    ) -> str:
+    ) -> list[TranscribedSegment]:
         """
         Transcribe an audio chunk, priming the model with previous context.
 
@@ -206,7 +224,7 @@ class Transcriber:
             language: language code (e.g. "en", "pt") or None for auto-detect
 
         Returns:
-            Transcribed text (stripped)
+            List of timestamped segments.
         """
         self._ensure_model()
 
@@ -235,10 +253,36 @@ class Transcriber:
             vad_filter=self._vad_filter,
             repetition_penalty=self._repetition_penalty,
             compression_ratio_threshold=self._compression_ratio_threshold,
+            word_timestamps=True,
         )
 
-        parts = []
+        result: list[TranscribedSegment] = []
         for seg in segments:
             if seg.text:
-                parts.append(seg.text)
-        return " ".join(parts).strip()
+                seg_words: list[TranscribedWord] = []
+                if getattr(seg, "words", None):
+                    for w in seg.words:
+                        if getattr(w, "word", None):
+                            seg_words.append(
+                                TranscribedWord(
+                                    start=float(getattr(w, "start", 0.0) or 0.0),
+                                    end=float(getattr(w, "end", 0.0) or 0.0),
+                                    word=str(getattr(w, "word", "")).strip(),
+                                )
+                            )
+                result.append(
+                    TranscribedSegment(
+                        start=float(getattr(seg, "start", 0.0) or 0.0),
+                        end=float(getattr(seg, "end", 0.0) or 0.0),
+                        text=str(seg.text).strip(),
+                        words=tuple(seg_words),
+                    )
+                )
+        return result
+
+
+def segments_to_text(segments: list[TranscribedSegment]) -> str:
+    """Join transcribed segments into plain text."""
+    if not segments:
+        return ""
+    return " ".join(seg.text for seg in segments if seg.text).strip()

@@ -17,8 +17,9 @@ from fastapi.staticfiles import StaticFiles
 from pipeline.config import DEFAULT_CONFIG, config_to_dict, get_config, update_config
 from pipeline.debate_metadata import build_initial_prompt, lookup_debate_metadata
 from pipeline.punctuation_restore import cleanup_chunk_artifacts, restore_punctuation
-from pipeline.sentence_buffer import SentenceBuffer, merge_chunks, merge_chunks_with_meta
-from pipeline.src.transcriber import build_prompt
+from pipeline.segment_merger import SegmentMerger
+from pipeline.sentence_buffer import SentenceBuffer
+from pipeline.src.transcriber import build_prompt, segments_to_text
 from pipeline.utils import resolve_compute_type, resolve_device
 from pipeline.server.audio_handler import (
     TARGET_SAMPLE_RATE,
@@ -154,6 +155,7 @@ async def file_rolling_worker(
     total_elapsed_sec = 0.0
     min_samples = int(cfg.MIN_CHUNK_DURATION * TARGET_SAMPLE_RATE)
     sentence_buffer = SentenceBuffer(language=language)
+    segment_merger = SegmentMerger()
     static_metadata = first_prompt_ref[0] if first_prompt_ref else "Transcrição de um debate político em Portugal."
 
     while True:
@@ -209,53 +211,48 @@ async def file_rolling_worker(
                 )
 
         def _transcribe():
-            t = transcriber.transcribe_chunk(
+            return transcriber.transcribe_chunk(
                 audio_16k,
                 previous_context_text=None,
                 initial_prompt=effective_prompt,
                 language=language,
             )
-            if t and cfg.PUNCTUATION_RESTORE:
-                t = restore_punctuation(t)
-            if t:
-                t = cleanup_chunk_artifacts(t)
-            return t
 
         loop = asyncio.get_event_loop()
         try:
-            text = await loop.run_in_executor(None, _transcribe)
+            segments = await loop.run_in_executor(None, _transcribe)
         except Exception:
             logger.exception("Transcription failed")
             queue.task_done()
             continue
 
         merge_info = None
-        if text:
-            prev_len = len(full_transcript)
+        raw_text = ""
+        to_send = ""
+        if segments:
+            raw_text = cleanup_chunk_artifacts(segments_to_text(segments))
+            merged_new, merge_meta = segment_merger.merge(segments, window_start)
+            if merged_new:
+                if cfg.PUNCTUATION_RESTORE:
+                    merged_new = restore_punctuation(merged_new)
+                to_send = cleanup_chunk_artifacts(merged_new)
+                full_transcript = f"{full_transcript} {to_send}".strip() if full_transcript else to_send
             if debug_frames:
-                full_transcript, merge_meta = merge_chunks_with_meta(full_transcript, text)
-                merge_info = (
-                    {
-                        "anchor": merge_meta["anchor"],
-                        "match_size": merge_meta["match_size"],
-                        "match_at": merge_meta.get("match_at", -1),
-                        "best_match": merge_meta.get("best_match", ""),
-                        "text_removed": merge_meta.get("text_removed", ""),
-                        "new_content": merge_meta["new_content"],
-                    }
-                    if full_transcript and merge_meta["match_size"] > 0
-                    else None
-                )
-            else:
-                full_transcript = merge_chunks(full_transcript, text)
-                merge_info = None
+                merge_info = {
+                    "window_start": merge_meta.window_start,
+                    "kept_units": merge_meta.kept_units,
+                    "dropped_units": merge_meta.dropped_units,
+                    "last_committed_before": round(merge_meta.last_committed_before, 3),
+                    "last_committed_after": round(merge_meta.last_committed_after, 3),
+                    "new_content": to_send,
+                }
 
         if debug_frames:
             window_start = max(0.0, total_elapsed_sec - cfg.ROLLING_BUFFER_SEC)
             payload = {
                 "type": "debug_frame",
                 "time_range": [round(window_start, 1), round(total_elapsed_sec, 1)],
-                "raw": text or "",
+                "raw": raw_text,
             }
             if merge_info is not None:
                 payload["merge_info"] = merge_info
@@ -264,18 +261,16 @@ async def file_rolling_worker(
             except Exception:
                 pass
 
-        if text:
-            to_send = full_transcript[prev_len:].strip()
-            if to_send:
+        if to_send:
+            try:
+                await ws.send_json({"type": "transcript", "text": to_send})
+            except Exception:
+                pass
+            for sentence in sentence_buffer.append(to_send):
                 try:
-                    await ws.send_json({"type": "transcript", "text": to_send})
+                    await ws.send_json({"type": "sentence", "text": sentence})
                 except Exception:
                     pass
-                for sentence in sentence_buffer.append(to_send):
-                    try:
-                        await ws.send_json({"type": "sentence", "text": sentence})
-                    except Exception:
-                        pass
 
         queue.task_done()
 
@@ -297,6 +292,7 @@ async def process_audio_loop(
     poll_interval = 0.05
     min_samples = int(cfg.MIN_CHUNK_DURATION * TARGET_SAMPLE_RATE)
     sentence_buffer = SentenceBuffer(language=language)
+    segment_merger = SegmentMerger()
     static_metadata = initial_prompt or "Transcrição de um debate político em Portugal."
 
     async def _send_debug_frame(
@@ -357,59 +353,53 @@ async def process_audio_loop(
                 )
 
         def _transcribe_mic():
-            t = transcriber.transcribe_chunk(
+            return transcriber.transcribe_chunk(
                 audio_16k,
                 previous_context_text=None,
                 initial_prompt=effective_prompt,
                 language=lang,
             )
-            if t and cfg.PUNCTUATION_RESTORE:
-                t = restore_punctuation(t)
-            if t:
-                t = cleanup_chunk_artifacts(t)
-            return t
 
         try:
-            text = await loop.run_in_executor(None, _transcribe_mic)
+            segments = await loop.run_in_executor(None, _transcribe_mic)
         except Exception:
             logger.exception("Transcription failed")
             continue
 
         merge_info = None
-        if text:
-            prev_len = len(full_transcript)
+        text = ""
+        to_send = ""
+        if segments:
+            text = cleanup_chunk_artifacts(segments_to_text(segments))
+            merged_new, merge_meta = segment_merger.merge(segments, window_start)
+            if merged_new:
+                if cfg.PUNCTUATION_RESTORE:
+                    merged_new = restore_punctuation(merged_new)
+                to_send = cleanup_chunk_artifacts(merged_new)
+                full_transcript = f"{full_transcript} {to_send}".strip() if full_transcript else to_send
             if debug_frames:
-                full_transcript, merge_meta = merge_chunks_with_meta(full_transcript, text)
-                merge_info = (
-                    {
-                        "anchor": merge_meta["anchor"],
-                        "match_size": merge_meta["match_size"],
-                        "match_at": merge_meta.get("match_at", -1),
-                        "best_match": merge_meta.get("best_match", ""),
-                        "text_removed": merge_meta.get("text_removed", ""),
-                        "new_content": merge_meta["new_content"],
-                    }
-                    if full_transcript and merge_meta["match_size"] > 0
-                    else None
-                )
-            else:
-                full_transcript = merge_chunks(full_transcript, text)
+                merge_info = {
+                    "window_start": merge_meta.window_start,
+                    "kept_units": merge_meta.kept_units,
+                    "dropped_units": merge_meta.dropped_units,
+                    "last_committed_before": round(merge_meta.last_committed_before, 3),
+                    "last_committed_after": round(merge_meta.last_committed_after, 3),
+                    "new_content": to_send,
+                }
 
         if debug_frames:
             await _send_debug_frame(elapsed, text, merge_info)
 
-        if text:
-            to_send = full_transcript[prev_len:].strip()
-            if to_send:
+        if to_send:
+            try:
+                await ws.send_json({"type": "transcript", "text": to_send})
+            except Exception:
+                break
+            for sentence in sentence_buffer.append(to_send):
                 try:
-                    await ws.send_json({"type": "transcript", "text": to_send})
+                    await ws.send_json({"type": "sentence", "text": sentence})
                 except Exception:
                     break
-                for sentence in sentence_buffer.append(to_send):
-                    try:
-                        await ws.send_json({"type": "sentence", "text": sentence})
-                    except Exception:
-                        break
 
 
 @app.websocket("/ws")
@@ -421,7 +411,6 @@ async def websocket_endpoint(ws: WebSocket):
     model_size = get_config().MODEL_SIZE
     source_type = "mic"
     debug_frames = False
-    last_context_ref: list = [""]
     task: Optional[asyncio.Task] = None
     file_queue: Optional[asyncio.Queue] = None
     file_worker: Optional[asyncio.Task] = None

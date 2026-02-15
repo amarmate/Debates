@@ -75,12 +75,15 @@
     entry.className = 'debug-frame';
     const [start, end] = timeRange;
     let html = '<div class="debug-frame-label">[' + start + ' - ' + end + ' sec]</div><div class="debug-frame-raw">' + escapeHtml(raw || '(empty)') + '</div>';
-    if (mergeInfo && (mergeInfo.anchor || mergeInfo.new_content !== undefined)) {
+    if (mergeInfo && (mergeInfo.anchor || mergeInfo.new_content !== undefined || mergeInfo.kept_units !== undefined)) {
       html += '<div class="debug-frame-merge">';
       if (mergeInfo.anchor) html += '<div class="debug-merge-anchor"><strong>Anchor used:</strong> ' + escapeHtml(mergeInfo.anchor) + '</div>';
       if (mergeInfo.best_match !== undefined) html += '<div class="debug-merge-match"><strong>Best match:</strong> ' + escapeHtml(mergeInfo.best_match || '(none)') + '</div>';
       if (mergeInfo.text_removed !== undefined) html += '<div class="debug-merge-removed"><strong>Text removed:</strong> ' + escapeHtml(mergeInfo.text_removed || '(none)') + '</div>';
       if (mergeInfo.match_size > 0) html += '<div class="debug-merge-size"><strong>Match:</strong> ' + mergeInfo.match_size + ' chars</div>';
+      if (mergeInfo.kept_units !== undefined) html += '<div class="debug-merge-size"><strong>Kept units:</strong> ' + mergeInfo.kept_units + '</div>';
+      if (mergeInfo.dropped_units !== undefined) html += '<div class="debug-merge-size"><strong>Dropped units:</strong> ' + mergeInfo.dropped_units + '</div>';
+      if (mergeInfo.last_committed_before !== undefined && mergeInfo.last_committed_after !== undefined) html += '<div class="debug-merge-size"><strong>Timeline:</strong> ' + mergeInfo.last_committed_before + 's -> ' + mergeInfo.last_committed_after + 's</div>';
       if (mergeInfo.new_content !== undefined) html += '<div class="debug-merge-appended"><strong>Appended:</strong> ' + escapeHtml(mergeInfo.new_content || '(none)') + '</div>';
       html += '</div>';
     }

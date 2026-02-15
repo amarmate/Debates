@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Parse overlapping transcription chunks, reconstruct deduplicated full text,
+Parse transcription chunks, reconstruct full text,
 segment into sentences, and export to CSV for fact-checking model training.
 
 Supports JSONL (debug_frame format) or plain text (one chunk per line).
-Uses shared logic from pipeline.sentence_buffer.
+Uses shared sentence segmentation logic from pipeline.sentence_buffer.
 
   uv run python scripts/chunk_to_sentences.py -i data/debug_chunks.jsonl -o data/sentences.csv
   uv run python scripts/chunk_to_sentences.py -i chunks.txt --format lines
@@ -20,7 +20,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from pipeline.sentence_buffer import merge_chunks, segment_sentences
+from pipeline.sentence_buffer import segment_sentences
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,8 @@ def parse_chunks(path: Path, fmt: str) -> list[str]:
                 continue
             try:
                 obj = json.loads(line)
-                text = obj.get("raw") or obj.get("text")
+                merge_info = obj.get("merge_info") if isinstance(obj.get("merge_info"), dict) else {}
+                text = merge_info.get("new_content") or obj.get("text") or obj.get("raw")
                 if text is not None:
                     chunks.append(str(text).strip())
                 else:
@@ -61,18 +62,11 @@ def parse_chunks(path: Path, fmt: str) -> list[str]:
     return chunks
 
 
-def reconstruct_full_text(
-    chunks: list[str],
-    search_window: int = 200,
-    min_overlap: int = 10,
-) -> str:
+def reconstruct_full_text(chunks: list[str]) -> str:
     """
-    Reconstruct full text from overlapping chunks using difflib-based merge_chunks.
+    Reconstruct full text by joining ordered chunk content.
     """
-    full_text = ""
-    for chunk in chunks:
-        full_text = merge_chunks(full_text, chunk, search_window, min_overlap)
-    return full_text
+    return " ".join(chunk for chunk in chunks if chunk).strip()
 
 
 def export_csv(sentences: list[str], path: Path) -> None:
@@ -118,18 +112,6 @@ def main() -> int:
         default="portuguese",
         help="Language for sentence tokenizer (e.g. portuguese, english)",
     )
-    parser.add_argument(
-        "--search-window",
-        type=int,
-        default=200,
-        help="Chars from end of accumulated text to compare for overlap (default: 200)",
-    )
-    parser.add_argument(
-        "--min-overlap",
-        type=int,
-        default=10,
-        help="Minimum overlap length to consider valid (default: 10)",
-    )
     args = parser.parse_args()
 
     if not args.input.exists():
@@ -146,11 +128,7 @@ def main() -> int:
         logger.error("No chunks found in input")
         return 1
 
-    full_text = reconstruct_full_text(
-        chunks,
-        search_window=args.search_window,
-        min_overlap=args.min_overlap,
-    )
+    full_text = reconstruct_full_text(chunks)
     logger.info("Reconstructed full text: %d characters", len(full_text))
 
     sentences = segment_sentences(full_text, args.language)

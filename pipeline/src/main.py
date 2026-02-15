@@ -8,7 +8,7 @@ import time
 from pipeline.config import DEFAULT_CONFIG
 from pipeline.utils import resolve_compute_type, resolve_device
 from pipeline.src.audio_stream import AudioStream
-from pipeline.src.transcriber import Transcriber
+from pipeline.src.transcriber import Transcriber, segments_to_text
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ def run_pipeline(config=None) -> None:
 
             logger.debug("Transcribing chunk (reason=%s, %.2fs)", reason, len(chunk) / cfg.SAMPLE_RATE)
             try:
-                text = transcriber.transcribe_chunk(
+                segments = transcriber.transcribe_chunk(
                     chunk,
                     previous_context_text=last_context,
                     sample_rate=cfg.SAMPLE_RATE,
@@ -75,6 +75,7 @@ def run_pipeline(config=None) -> None:
                 logger.exception("Transcription failed")
                 continue
 
+            text = segments_to_text(segments)
             if text:
                 logger.info("%s", text)
                 sys.stdout.flush()
