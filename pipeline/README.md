@@ -49,7 +49,37 @@ Or:
 python -m pipeline.server
 ```
 
-Open **http://localhost:8000** in your browser.
+### Host and port
+
+By default the server binds to **0.0.0.0:8000** (all interfaces, port 8000). Open **http://localhost:8000** in your browser, or use your machine’s IP if accessing from another device.
+
+**Change port:**
+
+```powershell
+uv run python -m pipeline.server --port 9000
+```
+
+Or set the `PORT` environment variable:
+
+```powershell
+$env:PORT = 9000; uv run python -m pipeline.server
+```
+
+**Change host (IP address):**
+
+```powershell
+# Listen only on localhost (no external access)
+uv run python -m pipeline.server --host 127.0.0.1
+
+# Listen on a specific interface (e.g. LAN IP)
+uv run python -m pipeline.server --host 192.168.1.100
+```
+
+**Combine host and port:**
+
+```powershell
+uv run python -m pipeline.server --host 127.0.0.1 --port 3000
+```
 
 If you get `ModuleNotFoundError: No module named 'fastapi'`, install with the `server` extra:
 

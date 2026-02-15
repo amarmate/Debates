@@ -7,6 +7,7 @@
   const debugFramesList = document.getElementById('debugFramesList');
   const canvas = document.getElementById('canvas');
   const ctx = canvas.getContext('2d');
+  const audioProgressEl = document.getElementById('audioProgress');
   const sourceSelect = document.getElementById('source');
   const fileSelectWrap = document.getElementById('fileSelectWrap');
   const fileSelect = document.getElementById('fileSelect');
@@ -21,11 +22,31 @@
   let animationId = null;
   let isListening = false;
   let fileChunkInterval = null;
+  let progressInterval = null;
 
   const BUFFER_SIZE = 4096;
+  const WARMUP_SEC = 2;
 
   function setStatus(msg) {
     statusEl.textContent = msg;
+  }
+
+  function formatTime(sec) {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  function setAudioProgress(text) {
+    if (audioProgressEl) audioProgressEl.textContent = text;
+  }
+
+  function clearAudioProgress() {
+    if (progressInterval) {
+      clearInterval(progressInterval);
+      progressInterval = null;
+    }
+    setAudioProgress('');
   }
 
   function appendTranscript(text) {
@@ -113,13 +134,13 @@
     const filename = fileSelect && fileSelect.value;
     if (!filename) {
       setStatus('Please select an audio file from the list.');
-      return;
+      throw new Error('No file selected');
     }
     setStatus('Loading file…');
     const resp = await fetch(`/api/audio/${encodeURIComponent(filename)}`);
     if (!resp.ok) {
       setStatus('Failed to load file.');
-      return;
+      throw new Error('Failed to load file');
     }
     const arrayBuffer = await resp.arrayBuffer();
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -149,6 +170,13 @@
     cfg.filename = filename;
     ws.send(JSON.stringify(cfg));
 
+    const warmupSamples = Math.floor(WARMUP_SEC * sampleRate);
+    const sentWarmup = warmupSamples >= 2 && int16.length >= warmupSamples;
+    if (sentWarmup) {
+      const warmupChunk = int16.subarray(0, warmupSamples);
+      ws.send(warmupChunk.buffer.slice(warmupChunk.byteOffset, warmupChunk.byteOffset + warmupChunk.byteLength));
+    }
+
     const readyData = await readyPromise;
     const fileChunkDuration = (readyData && readyData.file_chunk_duration) || 4.0;
 
@@ -168,14 +196,22 @@
     bufferSource.start(0);
 
     drawVisualizer();
+    const totalDuration = playBuffer.duration;
+    const progressStart = performance.now() / 1000;
+    progressInterval = setInterval(() => {
+      const elapsed = (performance.now() / 1000) - progressStart;
+      const pos = Math.min(elapsed, totalDuration);
+      setAudioProgress(formatTime(pos) + ' / ' + formatTime(totalDuration));
+    }, 200);
     bufferSource.onended = () => {
       setStatus('Playback finished. Transcription continues… Click Stop when done.');
       stopVisualizer();
+      clearAudioProgress();
       bufferSource = null;
     };
 
     const chunkSamples = Math.floor(fileChunkDuration * sampleRate);
-    let offset = 0;
+    let offset = sentWarmup ? warmupSamples : 0;
 
     function sendNextChunk() {
       if (offset >= int16.length || ws.readyState !== WebSocket.OPEN) return;
@@ -198,7 +234,7 @@
       stream = await startMicrophone();
     } catch (e) {
       setStatus('Microphone access denied. Please allow and try again.');
-      return;
+      throw e;
     }
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
     const sampleRate = audioContext.sampleRate;
@@ -232,6 +268,12 @@
 
     drawVisualizer();
 
+    const recordingStart = performance.now() / 1000;
+    progressInterval = setInterval(() => {
+      const elapsed = (performance.now() / 1000) - recordingStart;
+      setAudioProgress('Recording: ' + formatTime(elapsed));
+    }, 200);
+
     const cfg = getConfig();
     cfg.sample_rate = sampleRate;
     cfg.source = 'mic';
@@ -248,6 +290,8 @@
   async function start() {
     if (isListening) return;
 
+    toggleBtn.textContent = 'Stop';
+    toggleBtn.classList.add('listening');
     transcriptEl.textContent = 'Transcription will appear here as you speak…';
     transcriptEl.classList.add('empty');
     if (sentencesList) sentencesList.innerHTML = '';
@@ -293,11 +337,15 @@
       origOnMessage(ev);
     };
 
-    if (src === 'file') {
-      await startFile(readyPromise);
-    } else {
-      await startMic();
-      await readyPromise;
+    try {
+      if (src === 'file') {
+        await startFile(readyPromise);
+      } else {
+        await startMic();
+        await readyPromise;
+      }
+    } catch (e) {
+      stop();
     }
   }
 
@@ -308,6 +356,7 @@
     setStatus('Stopped. Choose source and click Start again.');
 
     stopVisualizer();
+    clearAudioProgress();
     if (fileChunkInterval) {
       clearTimeout(fileChunkInterval);
       fileChunkInterval = null;

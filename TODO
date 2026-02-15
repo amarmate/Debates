@@ -1,4 +1,7 @@
-# Future improvements
+1. the model should be fully loaded before the transcription starts (file starts playing)
 
-- Add more reference transcripts to data/benchmark/refs/ for benchmarking
-- Consider adding pre-commit hooks for linting
+2. Stop button should appear immediately after start is pressed to avoid starting more than one transcriptions at the same time. 
+
+3. Live audio part should show progress in the web app 
+
+4. Rolling buffer / rolling interval not working properly. 0-30, 30-60, ... when rolling interval = 2 sec and rolling buffer = 30 and max chunk duration = 30. Instead 0-30, 2-32, 4-34, ...

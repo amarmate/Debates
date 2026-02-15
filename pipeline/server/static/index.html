@@ -120,6 +120,13 @@
       color: var(--muted);
       margin: 0 0 0.75rem;
     }
+    .audio-progress {
+      font-weight: 400;
+      text-transform: none;
+      letter-spacing: 0;
+      color: var(--accent);
+      margin-left: 0.5rem;
+    }
     #canvas {
       width: 100%;
       height: 80px;
@@ -350,7 +357,7 @@
     </div>
     <p class="status" id="status">Choose source, then click Start. Allow microphone access when using Mic.</p>
     <div class="visualizer-wrapper">
-      <h3>Live audio</h3>
+      <h3>Live audio <span id="audioProgress" class="audio-progress"></span></h3>
       <canvas id="canvas" width="608" height="80"></canvas>
     </div>
     <div class="transcript-wrapper">
