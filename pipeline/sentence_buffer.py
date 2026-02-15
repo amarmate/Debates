@@ -29,10 +29,11 @@ def merge_chunks(
     min_overlap: int = 10,
 ) -> str:
     """
-    Merge overlapping chunks using fuzzy-anchor algorithm.
-    Uses difflib.SequenceMatcher (no .find()) to find longest match between
-    anchor (last 50-100 chars) and new_chunk. Discards everything before the
-    match end-point in new_chunk (removes hallucinations), appends only the rest.
+    Merge overlapping chunks using anchor-anywhere fuzzy algorithm.
+    Uses difflib.SequenceMatcher to locate the anchor (last ~100 chars of committed
+    text) anywhere inside new_chunk. Discards everything before the match end
+    (removes hallucinations like "O deputado prévio" when real text is "Um sorteio prévio"),
+    appends only the remainder.
     """
     merged, _ = merge_chunks_with_meta(
         accumulated_text, new_chunk, search_window, min_overlap
@@ -47,13 +48,16 @@ def merge_chunks_with_meta(
     min_overlap: int = 10,
 ) -> tuple[str, dict]:
     """
-    Fuzzy-anchor merge: anchor from merged_text, SequenceMatcher for overlap,
-    discard text before match, append remainder. Returns (merged_text, metadata).
+    Anchor-anywhere merge: find anchor (last ~100 chars of committed text) anywhere
+    in new_chunk via SequenceMatcher. Crop everything before match end, append remainder.
+    Handles hallucinations where Whisper produces different start text.
+    Returns (merged_text, metadata) with debug fields for verification.
     """
     new_chunk = new_chunk.strip()
     meta: dict = {
         "anchor": "",
         "match_size": 0,
+        "match_at": -1,
         "best_match": "",
         "text_removed": "",
         "new_content": "",
@@ -65,52 +69,71 @@ def merge_chunks_with_meta(
     if not accumulated_text:
         return new_chunk, meta
 
-    # 1. Define anchor: last 50-100 chars of merged_text
+    # 1. Anchor: last ~100 chars of committed text
     anchor_len = min(search_window, max(50, len(accumulated_text)))
     anchor = accumulated_text[-anchor_len:]
     meta["anchor"] = anchor
 
-    # 2. Fuzzy search: SequenceMatcher (no .find()), autojunk=False for accuracy
+    # 2. Fuzzy search: find anchor (or its suffix) anywhere in new_chunk
     matcher = difflib.SequenceMatcher(None, anchor, new_chunk, autojunk=False)
-    match = matcher.find_longest_match(0, len(anchor), 0, len(new_chunk))
+    blocks = matcher.get_matching_blocks()
 
-    if match.size == 0 or match.size < min_overlap:
+    # Find block that spans anchor end (a+size==len(anchor)) with sufficient overlap
+    best_block = None
+    for block in blocks:
+        if block.size >= min_overlap and block.a + block.size == len(anchor):
+            if best_block is None or block.size > best_block.size:
+                best_block = block
+
+    # Fallback: try anchor suffixes (handles cases where full anchor tail doesn't match)
+    if best_block is None:
+        for suffix_len in range(len(anchor), min_overlap - 1, -1):
+            suffix = anchor[-suffix_len:]
+            sub_matcher = difflib.SequenceMatcher(None, suffix, new_chunk, autojunk=False)
+            sub_blocks = sub_matcher.get_matching_blocks()
+            for block in sub_blocks:
+                if block.size >= min_overlap and block.a + block.size == len(suffix):
+                    best_block = block
+                    break
+            if best_block is not None:
+                break
+
+    if best_block is None:
         logger.info(
-            "Merge: no valid overlap (match_size=%d). Fallback: append full chunk.",
-            match.size,
+            "Merge: no valid overlap (anchor-anywhere). Fallback: append full chunk.",
         )
+        _log_merge_debug(meta, accumulated_text, new_chunk)
         return accumulated_text + " " + new_chunk, meta
 
-    # Require match to span the end of the anchor (continuation point)
-    if match.a + match.size != len(anchor):
-        logger.info(
-            "Merge: match not at anchor end (a=%d, size=%d, len=%d). Fallback.",
-            match.a, match.size, len(anchor),
-        )
-        return accumulated_text + " " + new_chunk, meta
-
-    # 3. Locate & crop: discard everything in new_chunk before match end-point
-    overlap_end_in_new = match.b + match.size
-    text_removed = new_chunk[:overlap_end_in_new]
+    # 3. Crop & append: discard everything before match end in new_chunk
+    overlap_end_in_new = best_block.b + best_block.size
+    text_discarded = new_chunk[:overlap_end_in_new]
     new_text = new_chunk[overlap_end_in_new:].strip()
-    best_match = new_chunk[match.b:overlap_end_in_new]
+    best_match = new_chunk[best_block.b : overlap_end_in_new]
 
-    meta["match_size"] = match.size
+    meta["match_size"] = best_block.size
+    meta["match_at"] = best_block.b
     meta["best_match"] = best_match
-    meta["text_removed"] = text_removed
+    meta["text_removed"] = text_discarded
     meta["new_content"] = new_text
 
-    # 4. Debug logs
-    logger.info(
-        "Merge: anchor_used=%r | best_match=%r | text_removed=%r | appended=%r",
-        anchor[-60:] + ("..." if len(anchor) > 60 else ""),
-        best_match[:80] + ("..." if len(best_match) > 80 else ""),
-        text_removed[:80] + ("..." if len(text_removed) > 80 else ""),
-        new_text[:80] + ("..." if len(new_text) > 80 else ""),
-    )
+    _log_merge_debug(meta, accumulated_text, new_chunk)
 
-    # 5. Append only the remaining text
+    # 4. Append only the remaining text (hallucination/overlap discarded)
     return accumulated_text + (" " + new_text if new_text else ""), meta
+
+
+def _log_merge_debug(meta: dict, accumulated_text: str, new_chunk: str) -> None:
+    """Log debug info for every chunk: Prompt, Anchor, Match At, Text Discarded."""
+    anchor = meta.get("anchor", "")
+    match_at = meta.get("match_at", -1)
+    text_discarded = meta.get("text_removed", "")
+    logger.info(
+        "Merge: Anchor Text=%r | Match Found At=%d | Text Discarded=%r",
+        anchor[-80:] + ("..." if len(anchor) > 80 else ""),
+        match_at,
+        text_discarded[:100] + ("..." if len(text_discarded) > 100 else ""),
+    )
 
 
 def _extract_new_suffix_normalized(last_sent: str, text_new: str) -> str:

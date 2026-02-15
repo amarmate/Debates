@@ -18,6 +18,7 @@ from pipeline.config import DEFAULT_CONFIG, config_to_dict, get_config, update_c
 from pipeline.debate_metadata import build_initial_prompt, lookup_debate_metadata
 from pipeline.punctuation_restore import cleanup_chunk_artifacts, restore_punctuation
 from pipeline.sentence_buffer import SentenceBuffer, merge_chunks, merge_chunks_with_meta
+from pipeline.src.transcriber import build_prompt
 from pipeline.utils import resolve_compute_type, resolve_device
 from pipeline.server.audio_handler import (
     TARGET_SAMPLE_RATE,
@@ -148,12 +149,12 @@ async def file_rolling_worker(
         max_chunk_duration=cfg.ROLLING_BUFFER_SEC,
         max_buffer_seconds=cfg.ROLLING_BUFFER_SEC,
     )
-    last_context = ""
     full_transcript = ""
     last_process_sec = 0.0
     total_elapsed_sec = 0.0
     min_samples = int(cfg.MIN_CHUNK_DURATION * TARGET_SAMPLE_RATE)
     sentence_buffer = SentenceBuffer(language=language)
+    static_metadata = first_prompt_ref[0] if first_prompt_ref else "Transcrição de um debate político em Portugal."
 
     while True:
         item = await queue.get()
@@ -190,16 +191,28 @@ async def file_rolling_worker(
             queue.task_done()
             continue
 
-        initial_prompt = (
-            first_prompt_ref[0] if first_prompt_ref and cfg.INITIAL_PROMPT_ENABLED else None
-        )
-        previous_context = (last_context or None) if cfg.CONTEXT_INJECTION_ENABLED else None
+        window_start = max(0.0, total_elapsed_sec - cfg.ROLLING_BUFFER_SEC)
+        effective_prompt = None
+        if cfg.INITIAL_PROMPT_ENABLED or cfg.CONTEXT_INJECTION_ENABLED:
+            effective_prompt = build_prompt(
+                current_time=total_elapsed_sec,
+                static_metadata=static_metadata,
+                full_transcript=full_transcript,
+                window_start=window_start,
+                total_elapsed_sec=total_elapsed_sec,
+                context_chars=cfg.CONTEXT_WINDOW_SIZE,
+            )
+            if debug_frames and effective_prompt:
+                logger.info(
+                    "Prompt Used (end): ...%s",
+                    effective_prompt[-150:] + ("..." if len(effective_prompt) > 150 else ""),
+                )
 
         def _transcribe():
             t = transcriber.transcribe_chunk(
                 audio_16k,
-                previous_context_text=previous_context,
-                initial_prompt=initial_prompt,
+                previous_context_text=None,
+                initial_prompt=effective_prompt,
                 language=language,
             )
             if t and cfg.PUNCTUATION_RESTORE:
@@ -218,7 +231,6 @@ async def file_rolling_worker(
 
         merge_info = None
         if text:
-            last_context = text
             prev_len = len(full_transcript)
             if debug_frames:
                 full_transcript, merge_meta = merge_chunks_with_meta(full_transcript, text)
@@ -226,6 +238,7 @@ async def file_rolling_worker(
                     {
                         "anchor": merge_meta["anchor"],
                         "match_size": merge_meta["match_size"],
+                        "match_at": merge_meta.get("match_at", -1),
                         "best_match": merge_meta.get("best_match", ""),
                         "text_removed": merge_meta.get("text_removed", ""),
                         "new_content": merge_meta["new_content"],
@@ -278,25 +291,29 @@ async def process_audio_loop(
 ):
     cfg = get_config()
     transcriber = get_transcriber(model_size)
-    last_context = ""
     full_transcript = ""
     last_process = 0.0
     session_start = time.monotonic()
     poll_interval = 0.05
     min_samples = int(cfg.MIN_CHUNK_DURATION * TARGET_SAMPLE_RATE)
     sentence_buffer = SentenceBuffer(language=language)
+    static_metadata = initial_prompt or "Transcrição de um debate político em Portugal."
 
-    async def _send_debug_frame(elapsed: float, text: str) -> None:
+    async def _send_debug_frame(
+        elapsed: float, text: str, merge_info: Optional[dict] = None
+    ) -> None:
         if not debug_frames:
             return
         window_start = max(0.0, elapsed - cfg.ROLLING_BUFFER_SEC)
-        window_end = elapsed
+        payload = {
+            "type": "debug_frame",
+            "time_range": [round(window_start, 1), round(elapsed, 1)],
+            "raw": text or "",
+        }
+        if merge_info is not None:
+            payload["merge_info"] = merge_info
         try:
-            await ws.send_json({
-                "type": "debug_frame",
-                "time_range": [round(window_start, 1), round(window_end, 1)],
-                "raw": text or "",
-            })
+            await ws.send_json(payload)
         except Exception:
             pass
 
@@ -322,13 +339,28 @@ async def process_audio_loop(
         loop = asyncio.get_event_loop()
         lang = language
 
+        window_start = max(0.0, elapsed - cfg.ROLLING_BUFFER_SEC)
+        effective_prompt = None
+        if cfg.INITIAL_PROMPT_ENABLED or cfg.CONTEXT_INJECTION_ENABLED:
+            effective_prompt = build_prompt(
+                current_time=elapsed,
+                static_metadata=static_metadata,
+                full_transcript=full_transcript,
+                window_start=window_start,
+                total_elapsed_sec=elapsed,
+                context_chars=cfg.CONTEXT_WINDOW_SIZE,
+            )
+            if debug_frames and effective_prompt:
+                logger.info(
+                    "Prompt Used (end): ...%s",
+                    effective_prompt[-150:] + ("..." if len(effective_prompt) > 150 else ""),
+                )
+
         def _transcribe_mic():
-            prev_ctx = (last_context or None) if cfg.CONTEXT_INJECTION_ENABLED else None
-            init_prompt = initial_prompt if cfg.INITIAL_PROMPT_ENABLED else None
             t = transcriber.transcribe_chunk(
                 audio_16k,
-                previous_context_text=prev_ctx,
-                initial_prompt=init_prompt,
+                previous_context_text=None,
+                initial_prompt=effective_prompt,
                 language=lang,
             )
             if t and cfg.PUNCTUATION_RESTORE:
@@ -343,12 +375,30 @@ async def process_audio_loop(
             logger.exception("Transcription failed")
             continue
 
-        await _send_debug_frame(elapsed, text)
+        merge_info = None
+        if text:
+            prev_len = len(full_transcript)
+            if debug_frames:
+                full_transcript, merge_meta = merge_chunks_with_meta(full_transcript, text)
+                merge_info = (
+                    {
+                        "anchor": merge_meta["anchor"],
+                        "match_size": merge_meta["match_size"],
+                        "match_at": merge_meta.get("match_at", -1),
+                        "best_match": merge_meta.get("best_match", ""),
+                        "text_removed": merge_meta.get("text_removed", ""),
+                        "new_content": merge_meta["new_content"],
+                    }
+                    if full_transcript and merge_meta["match_size"] > 0
+                    else None
+                )
+            else:
+                full_transcript = merge_chunks(full_transcript, text)
+
+        if debug_frames:
+            await _send_debug_frame(elapsed, text, merge_info)
 
         if text:
-            last_context = text
-            prev_len = len(full_transcript)
-            full_transcript = merge_chunks(full_transcript, text)
             to_send = full_transcript[prev_len:].strip()
             if to_send:
                 try:

@@ -12,6 +12,54 @@ logger = logging.getLogger(__name__)
 WHISPER_PROMPT_MAX_TOKENS = 224
 CHARS_PER_TOKEN_ESTIMATE = 4
 
+def build_prompt(
+    current_time: float,
+    static_metadata: str,
+    full_transcript: str,
+    window_start: float,
+    total_elapsed_sec: float,
+    context_chars: int,
+) -> str:
+    """
+    Build the initial prompt for Whisper: static metadata + strict past context only.
+
+    Uses only text from full_transcript that corresponds to timestamps strictly before
+    current_time (i.e. before the overlapping window). This prevents under-transcription
+    caused by feeding overlapping transcripts as context.
+
+    Args:
+        current_time: End of the current transcription window (seconds).
+        static_metadata: Static domain prompt (e.g. "Debate Presidencial, António José Seguro...").
+        full_transcript: Global merged transcript accumulated so far.
+        window_start: Start of current window (current_time - ROLLING_BUFFER_SEC).
+        total_elapsed_sec: Total elapsed time for char/sec estimation.
+        context_chars: Max chars of past context (from CONTEXT_WINDOW_SIZE config).
+
+    Returns:
+        Combined prompt: "{static_metadata} ... {dynamic_context}"
+    """
+    static_part = (static_metadata or "").strip()
+    if not static_part:
+        static_part = "Transcrição de um debate político em Portugal."
+
+    if not full_transcript or total_elapsed_sec <= 0 or window_start <= 0:
+        return static_part
+
+    # Estimate chars per second to exclude overlapping region.
+    chars_per_sec = len(full_transcript) / total_elapsed_sec
+    # Exclude text that corresponds to audio in/after the overlap zone (before window_start).
+    chars_before_window = chars_per_sec * window_start
+    safe_transcript = full_transcript[: int(chars_before_window)]
+
+    if not safe_transcript:
+        return static_part
+
+    dynamic_part = safe_transcript[-context_chars:].strip()
+    if not dynamic_part:
+        return static_part
+
+    return f"{static_part} ... {dynamic_part}"
+
 
 def _truncate_context(text: str, max_chars: int) -> str:
     """Return the last max_chars of text, preserving word boundaries if possible."""
