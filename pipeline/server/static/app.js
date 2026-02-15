@@ -55,11 +55,26 @@
     transcriptEl.textContent = current === 'Transcription will appear here as you speak…' ? text : current + ' ' + text;
   }
 
-  function appendSentence(text) {
+  function formatTime(seconds) {
+    if (seconds === undefined || seconds === null) return '';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return (m > 0 ? m + ':' : '0:') + String(s).padStart(2, '0');
+  }
+
+  function appendSentence(text, time) {
     if (!sentencesList || !text) return;
     const entry = document.createElement('div');
     entry.className = 'sentence-item';
-    entry.textContent = text;
+    if (time !== undefined && time !== null) {
+      const badge = document.createElement('span');
+      badge.className = 'sentence-time';
+      badge.textContent = '[' + formatTime(time) + ']';
+      entry.appendChild(badge);
+      entry.appendChild(document.createTextNode(' ' + text));
+    } else {
+      entry.textContent = text;
+    }
     sentencesList.appendChild(entry);
     sentencesList.parentElement.scrollTop = sentencesList.parentElement.scrollHeight;
   }
@@ -75,14 +90,11 @@
     entry.className = 'debug-frame';
     const [start, end] = timeRange;
     let html = '<div class="debug-frame-label">[' + start + ' - ' + end + ' sec]</div><div class="debug-frame-raw">' + escapeHtml(raw || '(empty)') + '</div>';
-    if (mergeInfo && (mergeInfo.anchor || mergeInfo.new_content !== undefined || mergeInfo.kept_units !== undefined)) {
+    if (mergeInfo && (mergeInfo.new_content !== undefined || mergeInfo.confirmed_units !== undefined)) {
       html += '<div class="debug-frame-merge">';
-      if (mergeInfo.anchor) html += '<div class="debug-merge-anchor"><strong>Anchor used:</strong> ' + escapeHtml(mergeInfo.anchor) + '</div>';
-      if (mergeInfo.best_match !== undefined) html += '<div class="debug-merge-match"><strong>Best match:</strong> ' + escapeHtml(mergeInfo.best_match || '(none)') + '</div>';
-      if (mergeInfo.text_removed !== undefined) html += '<div class="debug-merge-removed"><strong>Text removed:</strong> ' + escapeHtml(mergeInfo.text_removed || '(none)') + '</div>';
-      if (mergeInfo.match_size > 0) html += '<div class="debug-merge-size"><strong>Match:</strong> ' + mergeInfo.match_size + ' chars</div>';
-      if (mergeInfo.kept_units !== undefined) html += '<div class="debug-merge-size"><strong>Kept units:</strong> ' + mergeInfo.kept_units + '</div>';
-      if (mergeInfo.dropped_units !== undefined) html += '<div class="debug-merge-size"><strong>Dropped units:</strong> ' + mergeInfo.dropped_units + '</div>';
+      if (mergeInfo.confirmed_units !== undefined) html += '<div class="debug-merge-size"><strong>Confirmed:</strong> ' + mergeInfo.confirmed_units + ' words</div>';
+      if (mergeInfo.tentative_units !== undefined && mergeInfo.tentative_units > 0) html += '<div class="debug-merge-size"><strong>Tentative (held back):</strong> ' + mergeInfo.tentative_units + ' words</div>';
+      if (mergeInfo.dropped_units !== undefined) html += '<div class="debug-merge-size"><strong>Dropped:</strong> ' + mergeInfo.dropped_units + ' words</div>';
       if (mergeInfo.boundary_dropped > 0) html += '<div class="debug-merge-size"><strong>Boundary dedup:</strong> ' + mergeInfo.boundary_dropped + ' word(s)</div>';
       if (mergeInfo.last_committed_before !== undefined && mergeInfo.last_committed_after !== undefined) html += '<div class="debug-merge-size"><strong>Timeline:</strong> ' + mergeInfo.last_committed_before + 's -> ' + mergeInfo.last_committed_after + 's</div>';
       if (mergeInfo.new_content !== undefined) html += '<div class="debug-merge-appended"><strong>Appended:</strong> ' + escapeHtml(mergeInfo.new_content || '(none)') + '</div>';
@@ -331,7 +343,7 @@
       } else if (data.type === 'transcript' && data.text) {
         appendTranscript(data.text);
       } else if (data.type === 'sentence' && data.text) {
-        appendSentence(data.text);
+        appendSentence(data.text, data.time);
       } else if (data.type === 'debug_frame' && data.time_range) {
         appendDebugFrame(data.time_range, data.raw, data.merge_info);
       }

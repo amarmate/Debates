@@ -161,9 +161,26 @@ async def file_rolling_worker(
     while True:
         item = await queue.get()
         if item is None:
+            # Flush tentative text from the confirmation buffer.
+            pending = segment_merger.flush()
+            if pending:
+                if cfg.PUNCTUATION_RESTORE:
+                    pending = restore_punctuation(pending)
+                pending = cleanup_chunk_artifacts(pending)
+                if pending:
+                    full_transcript = f"{full_transcript} {pending}".strip() if full_transcript else pending
+                    try:
+                        await ws.send_json({"type": "transcript", "text": pending})
+                    except Exception:
+                        pass
+                    for sentence in sentence_buffer.append(pending):
+                        try:
+                            await ws.send_json({"type": "sentence", "text": sentence, "time": round(total_elapsed_sec, 1)})
+                        except Exception:
+                            pass
             for sentence in sentence_buffer.flush():
                 try:
-                    await ws.send_json({"type": "sentence", "text": sentence})
+                    await ws.send_json({"type": "sentence", "text": sentence, "time": round(total_elapsed_sec, 1)})
                 except Exception:
                     pass
             break
@@ -231,7 +248,7 @@ async def file_rolling_worker(
         to_send = ""
         if segments:
             raw_text = cleanup_chunk_artifacts(segments_to_text(segments))
-            merged_new, merge_meta = segment_merger.merge(segments, window_start)
+            merged_new, merge_meta = segment_merger.merge(segments, window_start, total_elapsed_sec)
             if merged_new:
                 if cfg.PUNCTUATION_RESTORE:
                     merged_new = restore_punctuation(merged_new)
@@ -240,7 +257,9 @@ async def file_rolling_worker(
             if debug_frames:
                 merge_info = {
                     "window_start": merge_meta.window_start,
-                    "kept_units": merge_meta.kept_units,
+                    "window_end": round(merge_meta.window_end, 1),
+                    "confirmed_units": merge_meta.confirmed_units,
+                    "tentative_units": merge_meta.tentative_units,
                     "dropped_units": merge_meta.dropped_units,
                     "boundary_dropped": merge_meta.boundary_dropped,
                     "last_committed_before": round(merge_meta.last_committed_before, 3),
@@ -263,13 +282,14 @@ async def file_rolling_worker(
                 pass
 
         if to_send:
+            sentence_time = round(merge_meta.last_committed_after, 1) if segments and merge_meta else round(total_elapsed_sec, 1)
             try:
                 await ws.send_json({"type": "transcript", "text": to_send})
             except Exception:
                 pass
             for sentence in sentence_buffer.append(to_send):
                 try:
-                    await ws.send_json({"type": "sentence", "text": sentence})
+                    await ws.send_json({"type": "sentence", "text": sentence, "time": sentence_time})
                 except Exception:
                     pass
 
@@ -372,7 +392,7 @@ async def process_audio_loop(
         to_send = ""
         if segments:
             text = cleanup_chunk_artifacts(segments_to_text(segments))
-            merged_new, merge_meta = segment_merger.merge(segments, window_start)
+            merged_new, merge_meta = segment_merger.merge(segments, window_start, elapsed)
             if merged_new:
                 if cfg.PUNCTUATION_RESTORE:
                     merged_new = restore_punctuation(merged_new)
@@ -381,7 +401,9 @@ async def process_audio_loop(
             if debug_frames:
                 merge_info = {
                     "window_start": merge_meta.window_start,
-                    "kept_units": merge_meta.kept_units,
+                    "window_end": round(merge_meta.window_end, 1),
+                    "confirmed_units": merge_meta.confirmed_units,
+                    "tentative_units": merge_meta.tentative_units,
                     "dropped_units": merge_meta.dropped_units,
                     "boundary_dropped": merge_meta.boundary_dropped,
                     "last_committed_before": round(merge_meta.last_committed_before, 3),
@@ -393,13 +415,14 @@ async def process_audio_loop(
             await _send_debug_frame(elapsed, text, merge_info)
 
         if to_send:
+            sentence_time = round(merge_meta.last_committed_after, 1) if segments and merge_meta else round(elapsed, 1)
             try:
                 await ws.send_json({"type": "transcript", "text": to_send})
             except Exception:
                 break
             for sentence in sentence_buffer.append(to_send):
                 try:
-                    await ws.send_json({"type": "sentence", "text": sentence})
+                    await ws.send_json({"type": "sentence", "text": sentence, "time": sentence_time})
                 except Exception:
                     break
 

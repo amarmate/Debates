@@ -1,11 +1,15 @@
 """
 Timestamp-based segment deduplication for rolling-window transcription.
 
-Includes two safety layers beyond pure timestamp filtering:
-1. Text-overlap boundary guard — catches word duplicates caused by Whisper
+Includes:
+1. Confirmation buffer — words from the trailing edge of each window are
+   held back until the next window re-transcribes them with more forward
+   context.  This fixes inaccurate words (e.g. "parado" -> "prazo") and
+   artificial punctuation at chunk boundaries.
+2. Text-overlap boundary guard — catches word duplicates caused by Whisper
    assigning slightly different timestamps to the same word across windows.
-2. Trailing-ellipsis strip — removes "..." that Whisper adds when audio is
-   cut at a chunk boundary (next window will have the complete text).
+3. Trailing-ellipsis strip — removes "..." that Whisper adds when audio is
+   cut at a chunk boundary.
 """
 import logging
 import re
@@ -17,8 +21,8 @@ from pipeline.src.transcriber import TranscribedSegment
 logger = logging.getLogger(__name__)
 
 _EPSILON_SEC = 0.05
-# How many tail words to remember for the text-overlap boundary guard.
 _BOUNDARY_GUARD_WORDS = 3
+_DEFAULT_CONFIRMATION_MARGIN_SEC = 2.0
 
 
 def _join_words(words: list[str]) -> str:
@@ -40,29 +44,13 @@ def _strip_trailing_ellipsis(text: str) -> str:
     return re.sub(r"\.\.\.\s*$", "", text).rstrip()
 
 
-def _strip_trailing_period(text: str) -> str:
-    """
-    Remove a trailing period from fragment text.
-
-    Whisper adds '.' at the end of every chunk because it thinks the audio
-    ended.  These are chunk-boundary artifacts — the next window will
-    provide the continuation.  Real sentence-ending periods are preserved
-    because they appear *within* the fragment, not at the trailing edge.
-
-    We only strip '.' (not '!' or '?') because exclamation/question marks
-    are almost always intentional.
-    """
-    stripped = text.rstrip()
-    if stripped.endswith(".") and not stripped.endswith("..."):
-        return stripped[:-1].rstrip()
-    return text
-
-
 @dataclass(frozen=True)
 class MergeMetadata:
     """Debug information for UI/diagnostics."""
     window_start: float
-    kept_units: int
+    window_end: float
+    confirmed_units: int
+    tentative_units: int
     dropped_units: int
     boundary_dropped: int
     last_committed_before: float
@@ -76,32 +64,55 @@ class SegmentMerger:
     Strategy:
     - Convert local segment/word times to absolute times with window_start.
     - Keep only content ending after last committed timestamp.
-    - Prefer word-level filtering when available for partial segment overlap.
+    - Within a segment, once the first word passes the threshold, keep ALL
+      remaining words (prevents garbling from non-monotonic Whisper timestamps).
+    - Confirmation buffer: words in the last `confirmation_margin_sec` of each
+      window are held back as tentative.  The next window re-transcribes them
+      with more forward context, producing better word choices and punctuation.
     - Text-overlap boundary guard: skip leading words that duplicate the
-      tail of already-committed text (handles Whisper timestamp drift).
-    - Strip trailing ellipsis before committing (chunk-boundary artifact).
+      tail of already-committed text (handles cross-window timestamp drift).
+    - Strip trailing ellipsis (chunk-boundary artifact).
     """
 
-    def __init__(self, epsilon_sec: float = _EPSILON_SEC) -> None:
+    def __init__(
+        self,
+        epsilon_sec: float = _EPSILON_SEC,
+        confirmation_margin_sec: float = _DEFAULT_CONFIRMATION_MARGIN_SEC,
+    ) -> None:
         self._epsilon_sec = epsilon_sec
+        self._confirmation_margin_sec = confirmation_margin_sec
         self._last_committed_end_sec = 0.0
-        # Ring buffer of the last N normalized words committed, for boundary guard.
         self._committed_tail: deque[str] = deque(maxlen=_BOUNDARY_GUARD_WORDS)
+        self._pending_text = ""  # tentative text held back for confirmation
 
     @property
     def last_committed_end_sec(self) -> float:
         return self._last_committed_end_sec
 
     def merge(
-        self, segments: list[TranscribedSegment], window_start: float
+        self,
+        segments: list[TranscribedSegment],
+        window_start: float,
+        window_end: float,
     ) -> tuple[str, MergeMetadata]:
         """
-        Return only new text not already committed in prior windows.
+        Return only new *confirmed* text.
+
+        Words in the last `confirmation_margin_sec` of the window are held
+        back as tentative.  The next window will re-transcribe them with more
+        forward context (better word accuracy and natural punctuation).
         """
         last_before = self._last_committed_end_sec
-        kept_units = 0
+        cutoff = window_end - self._confirmation_margin_sec
+
+        # Previous tentative text is discarded — the current window
+        # re-transcribes that time range with better context.
+        self._pending_text = ""
+
+        # --- Step 1: Timestamp-filter words/segments ---
+        # Collect (word_text, abs_end_time) tuples for all new content.
+        all_kept: list[tuple[str, float]] = []
         dropped_units = 0
-        kept_pieces: list[str] = []
 
         for seg in segments:
             seg_text = (seg.text or "").strip()
@@ -109,8 +120,7 @@ class SegmentMerger:
                 continue
 
             if seg.words:
-                kept_words: list[str] = []
-                keeping = False  # once True, keep ALL remaining words in segment
+                keeping = False
                 for word in seg.words:
                     abs_word_end = window_start + float(word.end)
                     if not keeping:
@@ -119,73 +129,87 @@ class SegmentMerger:
                         else:
                             dropped_units += 1
                             continue
-                    # keeping == True: accept this and all subsequent words
-                    kept_words.append(word.word)
-                    kept_units += 1
-                    self._last_committed_end_sec = max(
-                        self._last_committed_end_sec, abs_word_end
-                    )
-                piece = _join_words(kept_words)
-                if piece:
-                    kept_pieces.append(piece)
+                    # Once first word passes threshold, keep ALL remaining
+                    # words in this segment (prevents non-monotonic garbling).
+                    all_kept.append((word.word, abs_word_end))
                 continue
 
+            # Segment-level fallback (no word timestamps).
             abs_seg_end = window_start + float(seg.end)
             if abs_seg_end > (self._last_committed_end_sec + self._epsilon_sec):
-                kept_pieces.append(seg_text)
-                kept_units += 1
-                self._last_committed_end_sec = max(self._last_committed_end_sec, abs_seg_end)
+                all_kept.append((seg_text, abs_seg_end))
             else:
                 dropped_units += 1
 
-        merged_new = " ".join(kept_pieces).strip()
+        # --- Step 2: Split into confirmed and tentative ---
+        confirmed: list[tuple[str, float]] = []
+        tentative: list[tuple[str, float]] = []
+        for word_text, abs_end in all_kept:
+            if abs_end <= cutoff + self._epsilon_sec:
+                confirmed.append((word_text, abs_end))
+            else:
+                tentative.append((word_text, abs_end))
 
-        # --- Safety layer 1: text-overlap boundary guard ---
-        # Strip leading words that duplicate the tail of committed text.
-        merged_new, boundary_dropped = self._strip_boundary_overlap(merged_new)
+        # Update last_committed_end_sec for confirmed words only.
+        for _, t in confirmed:
+            self._last_committed_end_sec = max(self._last_committed_end_sec, t)
 
-        # --- Safety layer 2: strip trailing chunk-boundary artifacts ---
-        # First ellipsis ("..."), then the period Whisper adds at chunk ends.
-        merged_new = _strip_trailing_ellipsis(merged_new)
-        merged_new = _strip_trailing_period(merged_new)
+        confirmed_text = _join_words([w for w, _ in confirmed])
+        tentative_text = _join_words([w for w, _ in tentative])
 
-        # Update committed tail words for next merge's boundary guard.
-        if merged_new:
-            new_words = merged_new.split()
-            for w in new_words:
+        # --- Step 3: Safety layers on confirmed text ---
+        confirmed_text, boundary_dropped = self._strip_boundary_overlap(confirmed_text)
+        confirmed_text = _strip_trailing_ellipsis(confirmed_text)
+
+        # Store tentative for potential flush at stream end.
+        self._pending_text = tentative_text
+
+        # Update committed tail for next merge's boundary guard.
+        if confirmed_text:
+            for w in confirmed_text.split():
                 nw = _normalize_word(w)
                 if nw:
                     self._committed_tail.append(nw)
 
         meta = MergeMetadata(
             window_start=float(window_start),
-            kept_units=kept_units,
+            window_end=float(window_end),
+            confirmed_units=len(confirmed),
+            tentative_units=len(tentative),
             dropped_units=dropped_units,
             boundary_dropped=boundary_dropped,
             last_committed_before=last_before,
             last_committed_after=self._last_committed_end_sec,
         )
         logger.debug(
-            "Segment merge: window_start=%.2f kept=%d dropped=%d boundary_dropped=%d"
-            " last_before=%.2f last_after=%.2f",
-            meta.window_start,
-            meta.kept_units,
-            meta.dropped_units,
-            meta.boundary_dropped,
-            meta.last_committed_before,
-            meta.last_committed_after,
+            "Segment merge: window=[%.2f, %.2f] cutoff=%.2f confirmed=%d tentative=%d"
+            " dropped=%d boundary=%d last=%.2f->%.2f",
+            meta.window_start, meta.window_end, cutoff,
+            meta.confirmed_units, meta.tentative_units,
+            meta.dropped_units, meta.boundary_dropped,
+            meta.last_committed_before, meta.last_committed_after,
         )
-        return merged_new, meta
+        return confirmed_text, meta
+
+    def flush(self) -> str:
+        """
+        Emit any remaining tentative text.  Call when the stream ends so
+        the last window's trailing content is not lost.
+        """
+        text = self._pending_text
+        self._pending_text = ""
+        if text:
+            text, _ = self._strip_boundary_overlap(text)
+            text = _strip_trailing_ellipsis(text)
+            for w in text.split():
+                nw = _normalize_word(w)
+                if nw:
+                    self._committed_tail.append(nw)
+        return text
 
     def _strip_boundary_overlap(self, text: str) -> tuple[str, int]:
         """
         Remove leading words of *text* that duplicate the tail of committed text.
-
-        Whisper can assign slightly different timestamps to the same spoken word
-        across overlapping windows. Pure timestamp filtering lets these through.
-        This catches them by comparing normalized word forms.
-
-        Returns (cleaned_text, number_of_words_stripped).
         """
         if not text or not self._committed_tail:
             return text, 0
@@ -194,14 +218,11 @@ class SegmentMerger:
         if not words:
             return text, 0
 
-        tail = list(self._committed_tail)  # last N committed words (normalized)
+        tail = list(self._committed_tail)
 
-        # Find how many leading words of `text` match the end of committed tail.
-        # Check up to min(len(tail), len(words)) leading words.
         overlap = 0
         max_check = min(len(tail), len(words))
         for n in range(1, max_check + 1):
-            # Do the last n words of tail match the first n words of text?
             candidate = [_normalize_word(w) for w in words[:n]]
             if candidate == tail[-n:]:
                 overlap = n
