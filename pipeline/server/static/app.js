@@ -83,6 +83,7 @@
       if (mergeInfo.match_size > 0) html += '<div class="debug-merge-size"><strong>Match:</strong> ' + mergeInfo.match_size + ' chars</div>';
       if (mergeInfo.kept_units !== undefined) html += '<div class="debug-merge-size"><strong>Kept units:</strong> ' + mergeInfo.kept_units + '</div>';
       if (mergeInfo.dropped_units !== undefined) html += '<div class="debug-merge-size"><strong>Dropped units:</strong> ' + mergeInfo.dropped_units + '</div>';
+      if (mergeInfo.boundary_dropped > 0) html += '<div class="debug-merge-size"><strong>Boundary dedup:</strong> ' + mergeInfo.boundary_dropped + ' word(s)</div>';
       if (mergeInfo.last_committed_before !== undefined && mergeInfo.last_committed_after !== undefined) html += '<div class="debug-merge-size"><strong>Timeline:</strong> ' + mergeInfo.last_committed_before + 's -> ' + mergeInfo.last_committed_after + 's</div>';
       if (mergeInfo.new_content !== undefined) html += '<div class="debug-merge-appended"><strong>Appended:</strong> ' + escapeHtml(mergeInfo.new_content || '(none)') + '</div>';
       html += '</div>';
