@@ -171,9 +171,9 @@ async def file_rolling_worker(
 
         should_process = (
             total_elapsed_sec - last_process_sec >= cfg.ROLLING_INTERVAL_SEC
-            or (last_process_sec == 0 and total_elapsed_sec >= cfg.MIN_CHUNK_DURATION)
+            or (last_process_sec == 0 and total_elapsed_sec >= cfg.ROLLING_BUFFER_SEC)
         )
-        if not should_process or total_elapsed_sec < cfg.MIN_CHUNK_DURATION:
+        if not should_process or total_elapsed_sec < cfg.ROLLING_BUFFER_SEC:
             queue.task_done()
             continue
 
