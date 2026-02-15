@@ -79,10 +79,11 @@ def _is_valid_sentence(s: str) -> bool:
     stripped = s.strip()
     if not re.search(r"[.!?]$", stripped) and not stripped.endswith("..."):
         return False
-    # Reject orphaned clauses that start with lowercase conjunction/preposition
-    # (e.g. "e amamentação.", "que alarga os contratos...").
-    # These are fragments from bad sentence splits, not standalone facts.
-    if re.match(r"^(e|ou|que|mas|nem|de|do|da|dos|das|no|na|nos|nas|ao|à|aos|às)\s", stripped):
+    # Reject any sentence that starts with a lowercase letter.
+    # In Portuguese, legitimate sentences always start with uppercase.
+    # Fragments from mid-sentence chunk boundaries start with lowercase
+    # (e.g. "prazo, facilita o despedimento.", "reduz as limitações...").
+    if stripped[0].islower():
         return False
     return True
 

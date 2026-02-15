@@ -40,6 +40,24 @@ def _strip_trailing_ellipsis(text: str) -> str:
     return re.sub(r"\.\.\.\s*$", "", text).rstrip()
 
 
+def _strip_trailing_period(text: str) -> str:
+    """
+    Remove a trailing period from fragment text.
+
+    Whisper adds '.' at the end of every chunk because it thinks the audio
+    ended.  These are chunk-boundary artifacts — the next window will
+    provide the continuation.  Real sentence-ending periods are preserved
+    because they appear *within* the fragment, not at the trailing edge.
+
+    We only strip '.' (not '!' or '?') because exclamation/question marks
+    are almost always intentional.
+    """
+    stripped = text.rstrip()
+    if stripped.endswith(".") and not stripped.endswith("..."):
+        return stripped[:-1].rstrip()
+    return text
+
+
 @dataclass(frozen=True)
 class MergeMetadata:
     """Debug information for UI/diagnostics."""
@@ -92,16 +110,21 @@ class SegmentMerger:
 
             if seg.words:
                 kept_words: list[str] = []
+                keeping = False  # once True, keep ALL remaining words in segment
                 for word in seg.words:
                     abs_word_end = window_start + float(word.end)
-                    if abs_word_end > (self._last_committed_end_sec + self._epsilon_sec):
-                        kept_words.append(word.word)
-                        kept_units += 1
-                        self._last_committed_end_sec = max(
-                            self._last_committed_end_sec, abs_word_end
-                        )
-                    else:
-                        dropped_units += 1
+                    if not keeping:
+                        if abs_word_end > (self._last_committed_end_sec + self._epsilon_sec):
+                            keeping = True
+                        else:
+                            dropped_units += 1
+                            continue
+                    # keeping == True: accept this and all subsequent words
+                    kept_words.append(word.word)
+                    kept_units += 1
+                    self._last_committed_end_sec = max(
+                        self._last_committed_end_sec, abs_word_end
+                    )
                 piece = _join_words(kept_words)
                 if piece:
                     kept_pieces.append(piece)
@@ -121,8 +144,10 @@ class SegmentMerger:
         # Strip leading words that duplicate the tail of committed text.
         merged_new, boundary_dropped = self._strip_boundary_overlap(merged_new)
 
-        # --- Safety layer 2: strip trailing ellipsis (chunk-boundary artifact) ---
+        # --- Safety layer 2: strip trailing chunk-boundary artifacts ---
+        # First ellipsis ("..."), then the period Whisper adds at chunk ends.
         merged_new = _strip_trailing_ellipsis(merged_new)
+        merged_new = _strip_trailing_period(merged_new)
 
         # Update committed tail words for next merge's boundary guard.
         if merged_new:
