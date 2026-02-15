@@ -3,15 +3,15 @@ import argparse
 import logging
 import os
 import sys
+from pathlib import Path
 
+from pipeline.logging_config import setup_server_logging
 from pipeline.server.app import run_server
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
+    project_root = Path(__file__).resolve().parent.parent.parent
+    setup_server_logging(project_root=project_root)
+
     parser = argparse.ArgumentParser(description="Speech-to-Fact web server")
     parser.add_argument(
         "--port",

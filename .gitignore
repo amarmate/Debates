@@ -176,6 +176,7 @@ testaudio.txt
 
 # Pipeline outputs
 error_log.txt
+logs/
 data/temp/*.mp3
 data/temp/*.m4a
 data/temp/*.wav

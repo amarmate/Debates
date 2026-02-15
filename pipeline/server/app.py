@@ -525,9 +525,7 @@ def run_server(host: str = "0.0.0.0", port: int = 8000):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
+    from pipeline.logging_config import setup_server_logging
+
+    setup_server_logging(project_root=PROJECT_ROOT)
     run_server()
