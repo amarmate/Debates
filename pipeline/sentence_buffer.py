@@ -2,6 +2,7 @@
 Shared deduplication and sentence segmentation logic for live and batch processing.
 """
 import difflib
+import logging
 import re
 from collections import deque
 from typing import Iterator
@@ -10,6 +11,8 @@ import nltk
 
 # Ensure punkt is available for sentence tokenization
 nltk.download("punkt_tab", quiet=True)
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_for_overlap(s: str) -> str:
@@ -26,10 +29,10 @@ def merge_chunks(
     min_overlap: int = 10,
 ) -> str:
     """
-    Merge overlapping chunks using anchor-anywhere algorithm.
-    Uses the last N chars of accumulated text as anchor, finds longest match
-    anywhere in new_chunk (handles Whisper hallucinations at start of new window),
-    appends only the non-overlapping suffix.
+    Merge overlapping chunks using fuzzy-anchor algorithm.
+    Uses difflib.SequenceMatcher (no .find()) to find longest match between
+    anchor (last 50-100 chars) and new_chunk. Discards everything before the
+    match end-point in new_chunk (removes hallucinations), appends only the rest.
     """
     merged, _ = merge_chunks_with_meta(
         accumulated_text, new_chunk, search_window, min_overlap
@@ -44,39 +47,69 @@ def merge_chunks_with_meta(
     min_overlap: int = 10,
 ) -> tuple[str, dict]:
     """
-    Like merge_chunks but returns (merged_text, metadata) for debugging.
-    Metadata: anchor, match_size, new_content, raw_chunk.
+    Fuzzy-anchor merge: anchor from merged_text, SequenceMatcher for overlap,
+    discard text before match, append remainder. Returns (merged_text, metadata).
     """
     new_chunk = new_chunk.strip()
-    meta: dict = {"anchor": "", "match_size": 0, "new_content": "", "raw_chunk": new_chunk}
+    meta: dict = {
+        "anchor": "",
+        "match_size": 0,
+        "best_match": "",
+        "text_removed": "",
+        "new_content": "",
+        "raw_chunk": new_chunk,
+    }
 
     if not new_chunk:
         return accumulated_text, meta
     if not accumulated_text:
         return new_chunk, meta
 
-    anchor = (
-        accumulated_text[-search_window:]
-        if len(accumulated_text) > search_window
-        else accumulated_text
-    )
+    # 1. Define anchor: last 50-100 chars of merged_text
+    anchor_len = min(search_window, max(50, len(accumulated_text)))
+    anchor = accumulated_text[-anchor_len:]
     meta["anchor"] = anchor
 
-    matcher = difflib.SequenceMatcher(None, anchor, new_chunk)
+    # 2. Fuzzy search: SequenceMatcher (no .find()), autojunk=False for accuracy
+    matcher = difflib.SequenceMatcher(None, anchor, new_chunk, autojunk=False)
     match = matcher.find_longest_match(0, len(anchor), 0, len(new_chunk))
 
     if match.size == 0 or match.size < min_overlap:
+        logger.info(
+            "Merge: no valid overlap (match_size=%d). Fallback: append full chunk.",
+            match.size,
+        )
         return accumulated_text + " " + new_chunk, meta
 
-    # Require match to span the end of the anchor (we are continuing from master's tail)
+    # Require match to span the end of the anchor (continuation point)
     if match.a + match.size != len(anchor):
+        logger.info(
+            "Merge: match not at anchor end (a=%d, size=%d, len=%d). Fallback.",
+            match.a, match.size, len(anchor),
+        )
         return accumulated_text + " " + new_chunk, meta
 
+    # 3. Locate & crop: discard everything in new_chunk before match end-point
     overlap_end_in_new = match.b + match.size
+    text_removed = new_chunk[:overlap_end_in_new]
     new_text = new_chunk[overlap_end_in_new:].strip()
+    best_match = new_chunk[match.b:overlap_end_in_new]
+
     meta["match_size"] = match.size
+    meta["best_match"] = best_match
+    meta["text_removed"] = text_removed
     meta["new_content"] = new_text
 
+    # 4. Debug logs
+    logger.info(
+        "Merge: anchor_used=%r | best_match=%r | text_removed=%r | appended=%r",
+        anchor[-60:] + ("..." if len(anchor) > 60 else ""),
+        best_match[:80] + ("..." if len(best_match) > 80 else ""),
+        text_removed[:80] + ("..." if len(text_removed) > 80 else ""),
+        new_text[:80] + ("..." if len(new_text) > 80 else ""),
+    )
+
+    # 5. Append only the remaining text
     return accumulated_text + (" " + new_text if new_text else ""), meta
 
 

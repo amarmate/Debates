@@ -226,6 +226,8 @@ async def file_rolling_worker(
                     {
                         "anchor": merge_meta["anchor"],
                         "match_size": merge_meta["match_size"],
+                        "best_match": merge_meta.get("best_match", ""),
+                        "text_removed": merge_meta.get("text_removed", ""),
                         "new_content": merge_meta["new_content"],
                     }
                     if full_transcript and merge_meta["match_size"] > 0
