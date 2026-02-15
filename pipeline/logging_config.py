@@ -13,31 +13,10 @@ from typing import Optional
 
 def _console_filter(record: logging.LogRecord) -> bool:
     """
-    Allow on console: WARNING+, and INFO only for server/init messages.
-    Block verbose INFO (Merge, Prompt, etc.) to keep terminal clean.
+    Allow on console: WARNING+ only. Block all INFO.
+    Terminal stays minimal; full logs go to file.
     """
-    if record.levelno >= logging.WARNING:
-        return True
-    if record.levelno != logging.INFO:
-        return True
-    # INFO: allow only server management and init-style messages
-    msg = (record.getMessage() or "").lower()
-    name = (record.name or "").lower()
-    allow_substrings = (
-        "server", "uvicorn", "start", "port", "listen",
-        "model loaded", "transcription", "websocket", "disconnect",
-        "ready", "loaded", "logging",
-    )
-    if any(s in msg or s in name for s in allow_substrings):
-        return True
-    # Block verbose pipeline logs (Merge, Prompt, etc.)
-    if "pipeline.sentence_buffer" in record.name:
-        return False
-    if "pipeline.src.transcriber" in record.name and "prompt" in msg:
-        return False
-    if "pipeline.punctuation_restore" in record.name:
-        return False
-    return True
+    return record.levelno >= logging.WARNING
 
 
 def setup_server_logging(
@@ -80,5 +59,5 @@ def setup_server_logging(
     root.addHandler(file_handler)
     root.addHandler(console_handler)
 
-    logging.getLogger(__name__).info("Logging to %s", log_path)
+    print(f"Logging to {log_path}", file=sys.stdout)
     return log_path

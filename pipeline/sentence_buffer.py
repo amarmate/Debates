@@ -5,7 +5,7 @@ import difflib
 import logging
 import re
 from collections import deque
-from typing import Iterator
+from typing import Iterator, Optional
 
 import nltk
 
@@ -41,6 +41,12 @@ def merge_chunks(
     return merged
 
 
+# Minimum confidence (match_size / anchor_len) to accept a match; below this, discard to prevent duplication
+_MERGE_CONFIDENCE_THRESHOLD = 0.6
+# Characters of accumulated text to check for "already said" duplicates
+_ALREADY_SAID_WINDOW = 1000
+
+
 def merge_chunks_with_meta(
     accumulated_text: str,
     new_chunk: str,
@@ -69,6 +75,20 @@ def merge_chunks_with_meta(
     if not accumulated_text:
         return new_chunk, meta
 
+    # Safety 1: "Already Said" check (pre-merge) — discard if new_chunk or significant substring exists in recent text
+    last_recent = accumulated_text[-_ALREADY_SAID_WINDOW:]
+    if new_chunk in last_recent:
+        logger.info("Merge: chunk already in transcript (last %d chars), discarding duplicate.", _ALREADY_SAID_WINDOW)
+        return accumulated_text, meta
+    if len(new_chunk) >= 50:
+        significant = new_chunk[: min(80, len(new_chunk) // 2)]
+        if significant in last_recent:
+            logger.info(
+                "Merge: significant substring already in transcript (last %d chars), discarding duplicate.",
+                _ALREADY_SAID_WINDOW,
+            )
+            return accumulated_text, meta
+
     # 1. Anchor: last ~100 chars of committed text
     anchor_len = min(search_window, max(50, len(accumulated_text)))
     anchor = accumulated_text[-anchor_len:]
@@ -80,10 +100,12 @@ def merge_chunks_with_meta(
 
     # Find block that spans anchor end (a+size==len(anchor)) with sufficient overlap
     best_block = None
+    best_ref_len: Optional[int] = None  # length of pattern we matched against (anchor or suffix)
     for block in blocks:
         if block.size >= min_overlap and block.a + block.size == len(anchor):
             if best_block is None or block.size > best_block.size:
                 best_block = block
+                best_ref_len = len(anchor)
 
     # Fallback: try anchor suffixes (handles cases where full anchor tail doesn't match)
     if best_block is None:
@@ -94,16 +116,29 @@ def merge_chunks_with_meta(
             for block in sub_blocks:
                 if block.size >= min_overlap and block.a + block.size == len(suffix):
                     best_block = block
+                    best_ref_len = suffix_len
                     break
             if best_block is not None:
                 break
 
     if best_block is None:
-        logger.info(
-            "Merge: no valid overlap (anchor-anywhere). Fallback: append full chunk.",
+        logger.warning(
+            "Overlap failed, chunk discarded to prevent duplication.",
         )
         _log_merge_debug(meta, accumulated_text, new_chunk)
-        return accumulated_text + " " + new_chunk, meta
+        return accumulated_text, meta
+
+    # Safety 2: "Strict Match" policy — require confidence > 0.6 (match_size / ref_len)
+    ref_len = best_ref_len if best_ref_len is not None else len(anchor)
+    confidence = best_block.size / ref_len if ref_len > 0 else 0.0
+    if confidence <= _MERGE_CONFIDENCE_THRESHOLD:
+        logger.warning(
+            "Overlap failed, chunk discarded to prevent duplication. (confidence=%.2f <= %.2f)",
+            confidence,
+            _MERGE_CONFIDENCE_THRESHOLD,
+        )
+        _log_merge_debug(meta, accumulated_text, new_chunk)
+        return accumulated_text, meta
 
     # 3. Crop & append: discard everything before match end in new_chunk
     overlap_end_in_new = best_block.b + best_block.size
