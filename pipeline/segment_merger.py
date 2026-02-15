@@ -23,6 +23,17 @@ logger = logging.getLogger(__name__)
 _EPSILON_SEC = 0.05
 _BOUNDARY_GUARD_WORDS = 3
 _DEFAULT_CONFIRMATION_MARGIN_SEC = 2.0
+_RECENT_TEXT_CHARS = 500  # chars of committed text to remember for hallucination check
+
+# Pattern: sentence-end punctuation, then a proper noun phrase (2+ capitalized
+# words, possibly with accents) followed by a comma.  This is the typical
+# shape of a Whisper "speaker label" hallucination at speaker transitions.
+_SPEAKER_LABEL_RE = re.compile(
+    r"(?<=[.?!])"                                          # after sentence end
+    r"(\s+)"                                               # whitespace
+    r"([A-ZÀ-Ú][a-zà-ú]+(?:\s+[A-ZÀ-Ú][a-zà-ú]+)+)"   # ProperName ProperName+
+    r",\s*"                                                # comma + optional space
+)
 
 
 def _join_words(words: list[str]) -> str:
@@ -84,6 +95,7 @@ class SegmentMerger:
         self._last_committed_end_sec = 0.0
         self._committed_tail: deque[str] = deque(maxlen=_BOUNDARY_GUARD_WORDS)
         self._pending_text = ""  # tentative text held back for confirmation
+        self._recent_committed = ""  # last N chars for hallucination detection
 
     @property
     def last_committed_end_sec(self) -> float:
@@ -160,16 +172,20 @@ class SegmentMerger:
         # --- Step 3: Safety layers on confirmed text ---
         confirmed_text, boundary_dropped = self._strip_boundary_overlap(confirmed_text)
         confirmed_text = _strip_trailing_ellipsis(confirmed_text)
+        confirmed_text = self._strip_hallucinated_speaker_labels(confirmed_text)
 
         # Store tentative for potential flush at stream end.
         self._pending_text = tentative_text
 
-        # Update committed tail for next merge's boundary guard.
+        # Update committed tail and recent text buffer.
         if confirmed_text:
             for w in confirmed_text.split():
                 nw = _normalize_word(w)
                 if nw:
                     self._committed_tail.append(nw)
+            self._recent_committed = (
+                self._recent_committed + " " + confirmed_text
+            )[-_RECENT_TEXT_CHARS:]
 
         meta = MergeMetadata(
             window_start=float(window_start),
@@ -201,10 +217,49 @@ class SegmentMerger:
         if text:
             text, _ = self._strip_boundary_overlap(text)
             text = _strip_trailing_ellipsis(text)
+            text = self._strip_hallucinated_speaker_labels(text)
             for w in text.split():
                 nw = _normalize_word(w)
                 if nw:
                     self._committed_tail.append(nw)
+            self._recent_committed = (
+                self._recent_committed + " " + text
+            )[-_RECENT_TEXT_CHARS:]
+        return text
+
+    def _strip_hallucinated_speaker_labels(self, text: str) -> str:
+        """
+        Remove hallucinated speaker labels from confirmed text.
+
+        Whisper sometimes inserts the speaker's name (from prompt context) at
+        speaker transitions — e.g. "apreciar? António José Seguro, o país
+        não precisa".  The name is hallucinated, not in the audio.
+
+        Detection: a proper noun phrase (2+ capitalized words + comma) right
+        after sentence-ending punctuation, where the same phrase already
+        appeared in recently committed text.
+        """
+        if not text or not self._recent_committed:
+            return text
+
+        recent_lower = self._recent_committed.lower()
+
+        for m in _SPEAKER_LABEL_RE.finditer(text):
+            name = m.group(2)
+            if name.lower() in recent_lower:
+                # Strip "Name Name, " but keep the sentence-end and whitespace.
+                before = text[: m.start() + len(m.group(1))]
+                after = text[m.end():]
+                # Capitalize first letter of continuation.
+                if after and after[0].islower():
+                    after = after[0].upper() + after[1:]
+                text = before + after
+                logger.debug(
+                    "Speaker-label guard: stripped hallucinated '%s' from confirmed text",
+                    name,
+                )
+                break  # one per merge is enough
+
         return text
 
     def _strip_boundary_overlap(self, text: str) -> tuple[str, int]:
