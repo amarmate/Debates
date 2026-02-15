@@ -75,19 +75,12 @@ def merge_chunks_with_meta(
     if not accumulated_text:
         return new_chunk, meta
 
-    # Safety 1: "Already Said" check (pre-merge) — discard if new_chunk or significant substring exists in recent text
+    # Safety 1: "Already Said" check — discard only if entire new_chunk is in recent text (true duplicate).
+    # Do NOT check "significant substring": overlapping windows always share a prefix; merge will extract new tail.
     last_recent = accumulated_text[-_ALREADY_SAID_WINDOW:]
     if new_chunk in last_recent:
         logger.info("Merge: chunk already in transcript (last %d chars), discarding duplicate.", _ALREADY_SAID_WINDOW)
         return accumulated_text, meta
-    if len(new_chunk) >= 50:
-        significant = new_chunk[: min(80, len(new_chunk) // 2)]
-        if significant in last_recent:
-            logger.info(
-                "Merge: significant substring already in transcript (last %d chars), discarding duplicate.",
-                _ALREADY_SAID_WINDOW,
-            )
-            return accumulated_text, meta
 
     # 1. Anchor: last ~100 chars of committed text
     anchor_len = min(search_window, max(50, len(accumulated_text)))
@@ -148,6 +141,7 @@ def merge_chunks_with_meta(
     # Step B: Tail-Anchor Fallback — when difflib fails (e.g. hallucinated intro),
     # search for last 3 words of anchor in new_chunk. If found, crop before them and append.
     # Try last 3, then 2, then 1 word (handles "Bem-vindos" appearing alone).
+    # Normalize punctuation so "Boa noite." matches "boa noite," in chunk.
     words = anchor.split()
     for n in (3, 2, 1):
         if len(words) < n:
@@ -155,13 +149,28 @@ def merge_chunks_with_meta(
         tail_phrase = " ".join(words[-n:])
         if len(tail_phrase) < 5:
             continue
+        tail_stripped = tail_phrase.rstrip(".,;:!?")
+        if len(tail_stripped) < 5:
+            continue
         idx = new_chunk.find(tail_phrase)
-        if idx < 0:
-            idx = new_chunk.lower().find(tail_phrase.lower())
         if idx >= 0:
-            overlap_end = idx + len(tail_phrase)
+            match_len = len(tail_phrase)
+        else:
+            idx = new_chunk.lower().find(tail_phrase.lower())
+            if idx >= 0:
+                match_len = len(tail_phrase)
+        if idx < 0:
+            idx = new_chunk.find(tail_stripped)
+            if idx >= 0:
+                match_len = len(tail_stripped)
+        if idx < 0:
+            idx = new_chunk.lower().find(tail_stripped.lower())
+            if idx >= 0:
+                match_len = len(tail_stripped)
+        if idx >= 0:
+            overlap_end = idx + match_len
             new_text = new_chunk[overlap_end:].strip()
-            meta["match_size"] = len(tail_phrase)
+            meta["match_size"] = match_len
             meta["match_at"] = idx
             meta["best_match"] = tail_phrase
             meta["text_removed"] = new_chunk[:overlap_end]
@@ -174,12 +183,13 @@ def merge_chunks_with_meta(
             _log_merge_debug(meta, accumulated_text, new_chunk)
             return accumulated_text + (" " + new_text if new_text else ""), meta
 
-    # Step C: Only discard if both Step A and Step B fail
-    logger.warning(
-        "Overlap failed, chunk discarded to prevent duplication.",
-    )
+    # Step C: When both Step A and Step B fail, append the new chunk (no overlap found = likely new content).
+    # We already returned early if new_chunk was a full duplicate, so appending is safe.
+    meta["new_content"] = new_chunk
+    meta["text_removed"] = ""
+    logger.info("Merge: No overlap found, appending full chunk (%d chars) as new content.", len(new_chunk))
     _log_merge_debug(meta, accumulated_text, new_chunk)
-    return accumulated_text, meta
+    return accumulated_text + (" " + new_chunk if new_chunk else ""), meta
 
 
 def _log_merge_debug(meta: dict, accumulated_text: str, new_chunk: str) -> None:
