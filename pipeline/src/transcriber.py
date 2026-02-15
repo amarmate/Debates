@@ -12,28 +12,34 @@ logger = logging.getLogger(__name__)
 WHISPER_PROMPT_MAX_TOKENS = 224
 CHARS_PER_TOKEN_ESTIMATE = 4
 
-def build_prompt(
+# Strict prompt: only include text from audio strictly before current window.
+# Prevents "poisoned prompt" where overlapping/future text causes hallucinations.
+SAFE_PROMPT_MARGIN_SEC = 2.0  # Exclude 2s before window to avoid overlap leakage
+SAFE_PROMPT_CONTEXT_CHARS = 200  # Last N chars of safe text only
+
+
+def get_safe_prompt(
     current_time: float,
     static_metadata: str,
     full_transcript: str,
     window_start: float,
     total_elapsed_sec: float,
-    context_chars: int,
 ) -> str:
     """
-    Build the initial prompt for Whisper: static metadata + strict past context only.
+    Build a strict prompt: static metadata + only text from audio strictly in the past.
 
-    Uses only text from full_transcript that corresponds to timestamps strictly before
-    current_time (i.e. before the overlapping window). This prevents under-transcription
-    caused by feeding overlapping transcripts as context.
+    Condition: Only include text corresponding to segment.end < current_time.
+    Without segment timestamps, we use char/sec estimation with a safety margin to
+    exclude any text from the current overlapping window (prevents poisoned prompt).
+
+    Action: Take the last 200 chars of this filtered text and append to static metadata.
 
     Args:
         current_time: End of the current transcription window (seconds).
-        static_metadata: Static domain prompt (e.g. "Debate Presidencial, António José Seguro...").
+        static_metadata: Static domain prompt (e.g. debate metadata).
         full_transcript: Global merged transcript accumulated so far.
         window_start: Start of current window (current_time - ROLLING_BUFFER_SEC).
         total_elapsed_sec: Total elapsed time for char/sec estimation.
-        context_chars: Max chars of past context (from CONTEXT_WINDOW_SIZE config).
 
     Returns:
         Combined prompt: "{static_metadata} ... {dynamic_context}"
@@ -45,20 +51,44 @@ def build_prompt(
     if not full_transcript or total_elapsed_sec <= 0 or window_start <= 0:
         return static_part
 
-    # Estimate chars per second to exclude overlapping region.
+    # Strict cutoff: only text from audio before (window_start - margin).
+    # Excludes current overlapping window to prevent model from repeating it.
+    safe_end_time = max(0.0, window_start - SAFE_PROMPT_MARGIN_SEC)
     chars_per_sec = len(full_transcript) / total_elapsed_sec
-    # Exclude text that corresponds to audio in/after the overlap zone (before window_start).
-    chars_before_window = chars_per_sec * window_start
-    safe_transcript = full_transcript[: int(chars_before_window)]
+    chars_before_safe = chars_per_sec * safe_end_time
+    safe_transcript = full_transcript[: int(chars_before_safe)]
 
     if not safe_transcript:
         return static_part
 
-    dynamic_part = safe_transcript[-context_chars:].strip()
+    dynamic_part = safe_transcript[-SAFE_PROMPT_CONTEXT_CHARS:].strip()
     if not dynamic_part:
         return static_part
 
     return f"{static_part} ... {dynamic_part}"
+
+
+def build_prompt(
+    current_time: float,
+    static_metadata: str,
+    full_transcript: str,
+    window_start: float,
+    total_elapsed_sec: float,
+    context_chars: int,
+) -> str:
+    """
+    Build the initial prompt for Whisper: static metadata + strict past context only.
+
+    Delegates to get_safe_prompt to prevent poisoned prompt (overlapping text in context).
+    The context_chars arg is ignored; get_safe_prompt uses SAFE_PROMPT_CONTEXT_CHARS (200).
+    """
+    return get_safe_prompt(
+        current_time=current_time,
+        static_metadata=static_metadata,
+        full_transcript=full_transcript,
+        window_start=window_start,
+        total_elapsed_sec=total_elapsed_sec,
+    )
 
 
 def _truncate_context(text: str, max_chars: int) -> str:

@@ -121,41 +121,65 @@ def merge_chunks_with_meta(
             if best_block is not None:
                 break
 
-    if best_block is None:
-        logger.warning(
-            "Overlap failed, chunk discarded to prevent duplication.",
-        )
-        _log_merge_debug(meta, accumulated_text, new_chunk)
-        return accumulated_text, meta
-
     # Safety 2: "Strict Match" policy — require confidence > 0.6 (match_size / ref_len)
-    ref_len = best_ref_len if best_ref_len is not None else len(anchor)
-    confidence = best_block.size / ref_len if ref_len > 0 else 0.0
-    if confidence <= _MERGE_CONFIDENCE_THRESHOLD:
-        logger.warning(
-            "Overlap failed, chunk discarded to prevent duplication. (confidence=%.2f <= %.2f)",
-            confidence,
-            _MERGE_CONFIDENCE_THRESHOLD,
-        )
+    if best_block is not None:
+        ref_len = best_ref_len if best_ref_len is not None else len(anchor)
+        confidence = best_block.size / ref_len if ref_len > 0 else 0.0
+        if confidence <= _MERGE_CONFIDENCE_THRESHOLD:
+            best_block = None  # Fall through to Step B (Tail-Anchor Fallback)
+
+    # Step A success: use difflib result
+    if best_block is not None:
+        overlap_end_in_new = best_block.b + best_block.size
+        text_discarded = new_chunk[:overlap_end_in_new]
+        new_text = new_chunk[overlap_end_in_new:].strip()
+        best_match = new_chunk[best_block.b : overlap_end_in_new]
+
+        meta["match_size"] = best_block.size
+        meta["match_at"] = best_block.b
+        meta["best_match"] = best_match
+        meta["text_removed"] = text_discarded
+        meta["new_content"] = new_text
+
         _log_merge_debug(meta, accumulated_text, new_chunk)
-        return accumulated_text, meta
 
-    # 3. Crop & append: discard everything before match end in new_chunk
-    overlap_end_in_new = best_block.b + best_block.size
-    text_discarded = new_chunk[:overlap_end_in_new]
-    new_text = new_chunk[overlap_end_in_new:].strip()
-    best_match = new_chunk[best_block.b : overlap_end_in_new]
+        return accumulated_text + (" " + new_text if new_text else ""), meta
 
-    meta["match_size"] = best_block.size
-    meta["match_at"] = best_block.b
-    meta["best_match"] = best_match
-    meta["text_removed"] = text_discarded
-    meta["new_content"] = new_text
+    # Step B: Tail-Anchor Fallback — when difflib fails (e.g. hallucinated intro),
+    # search for last 3 words of anchor in new_chunk. If found, crop before them and append.
+    # Try last 3, then 2, then 1 word (handles "Bem-vindos" appearing alone).
+    words = anchor.split()
+    for n in (3, 2, 1):
+        if len(words) < n:
+            continue
+        tail_phrase = " ".join(words[-n:])
+        if len(tail_phrase) < 5:
+            continue
+        idx = new_chunk.find(tail_phrase)
+        if idx < 0:
+            idx = new_chunk.lower().find(tail_phrase.lower())
+        if idx >= 0:
+            overlap_end = idx + len(tail_phrase)
+            new_text = new_chunk[overlap_end:].strip()
+            meta["match_size"] = len(tail_phrase)
+            meta["match_at"] = idx
+            meta["best_match"] = tail_phrase
+            meta["text_removed"] = new_chunk[:overlap_end]
+            meta["new_content"] = new_text
+            logger.info(
+                "Merge: Tail-Anchor Fallback used (last 3 words at %d), appending %d chars",
+                idx,
+                len(new_text),
+            )
+            _log_merge_debug(meta, accumulated_text, new_chunk)
+            return accumulated_text + (" " + new_text if new_text else ""), meta
 
+    # Step C: Only discard if both Step A and Step B fail
+    logger.warning(
+        "Overlap failed, chunk discarded to prevent duplication.",
+    )
     _log_merge_debug(meta, accumulated_text, new_chunk)
-
-    # 4. Append only the remaining text (hallucination/overlap discarded)
-    return accumulated_text + (" " + new_text if new_text else ""), meta
+    return accumulated_text, meta
 
 
 def _log_merge_debug(meta: dict, accumulated_text: str, new_chunk: str) -> None:
