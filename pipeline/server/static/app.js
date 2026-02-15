@@ -96,6 +96,7 @@
       if (mergeInfo.tentative_units !== undefined && mergeInfo.tentative_units > 0) html += '<div class="debug-merge-size"><strong>Tentative (held back):</strong> ' + mergeInfo.tentative_units + ' words</div>';
       if (mergeInfo.dropped_units !== undefined) html += '<div class="debug-merge-size"><strong>Dropped:</strong> ' + mergeInfo.dropped_units + ' words</div>';
       if (mergeInfo.boundary_dropped > 0) html += '<div class="debug-merge-size"><strong>Boundary dedup:</strong> ' + mergeInfo.boundary_dropped + ' word(s)</div>';
+      if (mergeInfo.pending_recovered > 0) html += '<div class="debug-merge-size"><strong>Pending recovered:</strong> ' + mergeInfo.pending_recovered + ' word(s)</div>';
       if (mergeInfo.last_committed_before !== undefined && mergeInfo.last_committed_after !== undefined) html += '<div class="debug-merge-size"><strong>Timeline:</strong> ' + mergeInfo.last_committed_before + 's -> ' + mergeInfo.last_committed_after + 's</div>';
       if (mergeInfo.new_content !== undefined) html += '<div class="debug-merge-appended"><strong>Appended:</strong> ' + escapeHtml(mergeInfo.new_content || '(none)') + '</div>';
       html += '</div>';

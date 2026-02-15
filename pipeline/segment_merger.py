@@ -64,6 +64,7 @@ class MergeMetadata:
     tentative_units: int
     dropped_units: int
     boundary_dropped: int
+    pending_recovered: int
     last_committed_before: float
     last_committed_after: float
 
@@ -117,10 +118,6 @@ class SegmentMerger:
         last_before = self._last_committed_end_sec
         cutoff = window_end - self._confirmation_margin_sec
 
-        # Previous tentative text is discarded — the current window
-        # re-transcribes that time range with better context.
-        self._pending_text = ""
-
         # --- Step 1: Timestamp-filter words/segments ---
         # Collect (word_text, abs_end_time) tuples for all new content.
         all_kept: list[tuple[str, float]] = []
@@ -153,6 +150,19 @@ class SegmentMerger:
             else:
                 dropped_units += 1
 
+        # --- Step 1b: Recover pending words the current window skipped ---
+        recovered_text = ""
+        preserve_pending = False
+        if all_kept:
+            recovered_text = self._recover_lost_pending(all_kept)
+            self._pending_text = ""
+        elif self._pending_text:
+            # Window produced nothing — preserve old tentative text so the
+            # next window (with better coverage) can still recover it.
+            preserve_pending = True
+        else:
+            self._pending_text = ""
+
         # --- Step 2: Split into confirmed and tentative ---
         confirmed: list[tuple[str, float]] = []
         tentative: list[tuple[str, float]] = []
@@ -169,13 +179,25 @@ class SegmentMerger:
         confirmed_text = _join_words([w for w, _ in confirmed])
         tentative_text = _join_words([w for w, _ in tentative])
 
+        # Prepend any recovered pending words that the window skipped.
+        if recovered_text:
+            confirmed_text = (
+                (recovered_text + " " + confirmed_text).strip()
+                if confirmed_text
+                else recovered_text
+            )
+
         # --- Step 3: Safety layers on confirmed text ---
         confirmed_text, boundary_dropped = self._strip_boundary_overlap(confirmed_text)
         confirmed_text = _strip_trailing_ellipsis(confirmed_text)
         confirmed_text = self._strip_hallucinated_speaker_labels(confirmed_text)
 
         # Store tentative for potential flush at stream end.
-        self._pending_text = tentative_text
+        if tentative_text:
+            self._pending_text = tentative_text
+        elif not preserve_pending:
+            self._pending_text = ""
+        # else: keep old _pending_text — this window had no content
 
         # Update committed tail and recent text buffer.
         if confirmed_text:
@@ -187,6 +209,7 @@ class SegmentMerger:
                 self._recent_committed + " " + confirmed_text
             )[-_RECENT_TEXT_CHARS:]
 
+        pending_recovered = len(recovered_text.split()) if recovered_text else 0
         meta = MergeMetadata(
             window_start=float(window_start),
             window_end=float(window_end),
@@ -194,15 +217,17 @@ class SegmentMerger:
             tentative_units=len(tentative),
             dropped_units=dropped_units,
             boundary_dropped=boundary_dropped,
+            pending_recovered=pending_recovered,
             last_committed_before=last_before,
             last_committed_after=self._last_committed_end_sec,
         )
         logger.debug(
             "Segment merge: window=[%.2f, %.2f] cutoff=%.2f confirmed=%d tentative=%d"
-            " dropped=%d boundary=%d last=%.2f->%.2f",
+            " dropped=%d boundary=%d recovered=%d last=%.2f->%.2f",
             meta.window_start, meta.window_end, cutoff,
             meta.confirmed_units, meta.tentative_units,
             meta.dropped_units, meta.boundary_dropped,
+            meta.pending_recovered,
             meta.last_committed_before, meta.last_committed_after,
         )
         return confirmed_text, meta
@@ -226,6 +251,67 @@ class SegmentMerger:
                 self._recent_committed + " " + text
             )[-_RECENT_TEXT_CHARS:]
         return text
+
+    def _recover_lost_pending(
+        self, all_kept: list[tuple[str, float]]
+    ) -> str:
+        """
+        Check if previous tentative words were skipped by the current window.
+
+        When Whisper assigns slightly different timestamps across overlapping
+        windows, tentative words from the previous window may be dropped in
+        the current window (their re-transcribed timestamps fall at or below
+        ``last_committed_end_sec + epsilon``).  Detect this by checking
+        whether the current window's kept words cover the pending text, and
+        recover any uncovered prefix so those words are not permanently lost.
+        """
+        if not self._pending_text:
+            return ""
+
+        pending_words = self._pending_text.split()
+        if not pending_words or not all_kept:
+            return ""
+
+        pending_norm = [_normalize_word(w) for w in pending_words]
+        kept_norm = [
+            _normalize_word(w)
+            for w, _ in all_kept[: len(pending_words) + _BOUNDARY_GUARD_WORDS]
+        ]
+
+        if not kept_norm:
+            return ""
+
+        # If the first kept word matches the first pending word, the window IS
+        # re-transcribing the pending region — no recovery needed.
+        if pending_norm[0] == kept_norm[0]:
+            return ""
+
+        # Find the longest suffix of pending that matches a prefix of kept.
+        # Words before that suffix are "lost" (not re-transcribed).
+        best_overlap_start = len(pending_words)  # default: all lost
+        for i in range(1, len(pending_norm) + 1):
+            suffix = pending_norm[i:]
+            if not suffix:
+                # Reached the end without a match — all pending words are lost.
+                break
+            if len(suffix) > len(kept_norm):
+                continue
+            if suffix == kept_norm[: len(suffix)]:
+                best_overlap_start = i
+                break
+
+        if best_overlap_start == 0:
+            return ""
+
+        lost_words = pending_words[:best_overlap_start]
+        lost_text = _join_words(lost_words)
+        if lost_text:
+            logger.info(
+                "Pending recovery: %d word(s) not re-transcribed, committing: %s",
+                len(lost_words),
+                lost_text,
+            )
+        return lost_text
 
     def _strip_hallucinated_speaker_labels(self, text: str) -> str:
         """
